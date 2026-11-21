@@ -9,7 +9,7 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 ## Architecture
 
 - **The devcontainer feature** (`src/dev-kit/`) follows the [devcontainer feature spec](https://containers.dev/implementors/features/): `devcontainer-feature.json` declares options, environment, the shared volume and the VS Code extension; `install.sh` runs as root while the image is built and installs everything. The `dev-kit` command is a bash dispatcher; each command is `lib/<command>.sh` with a function `cmd_<command>`, installed to `/usr/local/lib/dev-kit/`.
-- Nothing in this repository knows a real installation. Everything specific to one (URLs, webhook secrets, the MCP servers someone uses) comes at runtime from configuration on the host, outside of git: `deploy` reads `/etc/dev-kit/deploy.env`, which the repository's devcontainer mounts from `~/.config/dev-kit/<repository>/`. Settings files are parsed as `KEY=VALUE` data, never sourced.
+- Nothing in this repository knows a real installation. Everything specific to one (URLs, webhook secrets, the MCP servers someone uses) comes at runtime from configuration on the host, outside of git: Claude Code reads the MCP servers and policies from `/etc/claude-code`, mounted from `~/.config/dev-kit/claude-code/`; `deploy` reads `/etc/dev-kit/deploy.env`, which the repository's devcontainer mounts from `~/.config/dev-kit/<repository>/`. Settings files are parsed as `KEY=VALUE` data, never sourced.
 - Secrets never appear in a command line (other processes can read those), and neither does what stands for them: `deploy` computes its HMAC with `printf` (a builtin) and `openssl dgst` on stdin, not with `openssl -hmac <key>`, and hands the signature header to curl through a file descriptor. Error messages never print a line of a settings file.
 
 ## Layout
@@ -22,7 +22,7 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 | `src/dev-kit/lib/`                            | `common.sh` (helpers) and one file per command: `release.sh`, `deploy.sh`, `fork-sync.sh` |
 | `test/dev-kit/`                               | Feature tests: `test.sh` and one script per scenario in `scenarios.json` (Debian, Alpine, without just); `commands.sh` tests the commands in throwaway repositories, without network |
 | `examples/<stack>/`                           | Reference files for new repositories per stack (`node-sveltekit`, `python-uv`, `go`, `php`); `examples/README.md` explains them |
-| `config.example/deploy.env`                   | Example of the deploy settings a repository keeps on the host |
+| `config.example/`                             | Examples of what stays on the host: `claude-code/` (managed Claude Code settings and MCP servers, mounted at `/etc/claude-code`) and `deploy.env` (deploy settings of a repository) |
 | `.github/workflows/check.yaml`                | On every push and pull request: `just check` and the feature tests |
 | `.github/workflows/publish.yaml`              | On a tag `v<x.y.z>`: publishes the feature to `ghcr.io/<owner>/dev-kit/dev-kit` with the version from the tag |
 | `.github/install-just.sh`                     | Installs the just release of the feature in the workflows |

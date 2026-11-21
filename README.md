@@ -2,7 +2,7 @@
 
 Shared tooling for a family of small self-hosted projects: what every repository needs in the same way comes from here instead of being copied into each one.
 
-- **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once.
+- **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once, with MCP servers and policies kept on the host.
 - **The `dev-kit` command**, installed by the feature: releases from the changelog, deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook, and a look at what upstream has for a fork.
 - **[Examples](examples/README.md)** for new repositories in Node/SvelteKit, Python/uv, Go and PHP: Dockerfile, compose files for a demo and for a Dockhand installation, devcontainer, `justfile`, editor and linter settings, all wired up with the feature and the `dev-kit` command.
 
@@ -35,40 +35,39 @@ The feature mounts the Docker volume `dev-kit-claude` at `/var/lib/dev-kit/claud
 
 The volume is separate from `~/.claude` on the host on purpose: tokens that Claude Code on the host holds for its own MCP servers never reach a container.
 
-**All devcontainers with the feature are one trust domain.** Code that runs in any of them as the remote user (a dependency's install script, a test, Claude Code steered by a prompt injection) can read the shared sign-in, the OAuth tokens of the shared MCP servers and the history of every workspace, and can change the shared settings, for example add a hook or an MCP server that then runs in every other devcontainer. So:
+**Once**, in any devcontainer with the feature, sign in: run `claude`.
+
+### Managed settings from the host
+
+Claude Code also reads managed settings from `/etc/claude-code/`: they win over the settings in the volume and in a repository, and nothing in Claude Code can change them. Keep them on the host, outside of git, in `~/.config/dev-kit/claude-code/`; every devcontainer mounts that directory read-only at `/etc/claude-code` (see below). Examples: [config.example/claude-code/](config.example/claude-code/).
+
+- `managed-mcp.json`: the MCP servers of every devcontainer. While it exists, Claude Code uses only these: no server can be added in the volume or by a repository. Sign in to a server with OAuth once, with `/mcp` in any devcontainer; the token stays in the volume.
+- `managed-settings.json`: policies, e.g. `allowManagedHooksOnly` (hooks from the volume or a repository do not run) and `disableClaudeAiConnectors` (the connectors of your claude.ai account stay out of devcontainers).
+
+Which servers you use and where they are stays on your host.
+
+### All devcontainers are one trust domain
+
+Code that runs in any devcontainer with the feature as the remote user (a dependency's install script, a test, Claude Code steered by a prompt injection) can read the shared sign-in, the OAuth tokens of the MCP servers and the history of every workspace, and can change the settings in the volume. The managed settings stop it from adding hooks or MCP servers that would then run in every other devcontainer, but only while the container is not privileged: a privileged container (as with the feature `docker-in-docker`) can remount what is read-only and reach the host. So:
 
 - Open only code you trust in a devcontainer with the feature; review what you merge from someone else first (for a fork: what upstream changed, including `.devcontainer/`, whose `initializeCommand` runs on the host).
-- Add only MCP servers at user scope whose tokens may be in every devcontainer: nothing with write access to infrastructure.
-- Settings in the volume are preferences, not a boundary: any code in a devcontainer can change them.
+- Use only MCP servers whose tokens may be in every devcontainer: nothing with write access to infrastructure.
+- Treat the working tree on the host as written by the container: whatever the host runs from it, code in the container can change. Mount `.devcontainer` read-only (see below), open the repository directly in the container, and do not run git, just or compose on the host in that tree: `.git/config` and `.git/hooks` can run commands for git, and a `justfile` or `compose.yaml` for the others. Look at them with `cat` if you need to.
 
-**Once**, in any devcontainer with the feature:
+### Files from the host
 
-```sh
-claude                 # sign in
-# MCP servers for every devcontainer, e.g. one over HTTP with OAuth (sign in with /mcp)
-claude mcp add --scope user --transport http notes https://mcp.example.com/mcp
-```
+A feature cannot run anything on the host, so the repository's `devcontainer.json` brings in what lives there. `initializeCommand` runs on the host before the container starts: it copies your user-level `~/.claude/CLAUDE.md` (or an empty file, so the repository works for everyone) to `~/.config/dev-kit/CLAUDE.md`, and creates `~/.config/dev-kit/claude-code/` if it is missing, because a bind mount fails without its source. Both are mounted read-only. The copy stays out of the workspace on purpose: code in the container can write the workspace, and a symbolic link it leaves there would make the host's `cp` overwrite any file of yours.
 
-If you add a server this way that you also have as a connector on claude.ai, Claude Code loads both. To use only your own servers in devcontainers, turn the claude.ai connectors off in the shared `settings.json` (in Claude Code: `/config`, or edit `$CLAUDE_CONFIG_DIR/settings.json`):
-
-```json
-{
-    "disableClaudeAiConnectors": true
-}
-```
-
-### Your CLAUDE.md in the container
-
-A feature cannot run anything on the host, so the repository copies your user-level `~/.claude/CLAUDE.md` itself: `initializeCommand` runs on the host before the container starts and copies it (or an empty file, so the repository works for everyone) to the ignored `.devcontainer/host/`, from where it is mounted read-only into the shared configuration:
+For the same reason the repository's `.devcontainer` is mounted read-only over itself: code in the container then cannot change what `initializeCommand` runs on the host, or the mounts and options of the next container.
 
 ```jsonc
-"initializeCommand": "mkdir -p .devcontainer/host && { cp ~/.claude/CLAUDE.md .devcontainer/host/CLAUDE.md 2>/dev/null || : > .devcontainer/host/CLAUDE.md; }",
+"initializeCommand": "mkdir -p ~/.config/dev-kit/claude-code && { cp ~/.claude/CLAUDE.md ~/.config/dev-kit/CLAUDE.md 2>/dev/null || : > ~/.config/dev-kit/CLAUDE.md; }",
 "mounts": [
-    "source=${localWorkspaceFolder}/.devcontainer/host/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly"
+    "source=${localWorkspaceFolder}/.devcontainer,target=${containerWorkspaceFolder}/.devcontainer,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/dev-kit/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/dev-kit/claude-code,target=/etc/claude-code,type=bind,readonly"
 ]
 ```
-
-Add `.devcontainer/host/` to `.gitignore`.
 
 ## The dev-kit command
 
@@ -104,9 +103,11 @@ The container needs no Dockhand token: the webhook can only redeploy that one st
 **Settings** live on the host, outside of git, one directory per repository: `~/.config/dev-kit/<repository>/deploy.env` (see [config.example/deploy.env](config.example/deploy.env)). It is read as `KEY=VALUE` data, nothing in it runs. The repository's `devcontainer.json` mounts that directory read-only at `/etc/dev-kit`, so a container sees only the settings of its own repository. Because a bind mount fails without its source, `initializeCommand` creates the directory first:
 
 ```jsonc
-"initializeCommand": "mkdir -p .devcontainer/host ~/.config/dev-kit/myapp && { cp ~/.claude/CLAUDE.md .devcontainer/host/CLAUDE.md 2>/dev/null || : > .devcontainer/host/CLAUDE.md; }",
+"initializeCommand": "mkdir -p ~/.config/dev-kit/claude-code ~/.config/dev-kit/myapp && { cp ~/.claude/CLAUDE.md ~/.config/dev-kit/CLAUDE.md 2>/dev/null || : > ~/.config/dev-kit/CLAUDE.md; }",
 "mounts": [
-    "source=${localWorkspaceFolder}/.devcontainer/host/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+    "source=${localWorkspaceFolder}/.devcontainer,target=${containerWorkspaceFolder}/.devcontainer,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/dev-kit/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/dev-kit/claude-code,target=/etc/claude-code,type=bind,readonly",
     "source=${localEnv:HOME}/.config/dev-kit/myapp,target=/etc/dev-kit,type=bind,readonly"
 ]
 ```

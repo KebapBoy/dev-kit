@@ -4,5 +4,3 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .env
-# Devcontainer: copy of the host's ~/.claude/CLAUDE.md
-.devcontainer/host/

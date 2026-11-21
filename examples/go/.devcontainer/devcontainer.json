@@ -9,9 +9,10 @@
         "target": "dev"
     },
     // Runs on the host before the container starts: copies your ~/.claude/CLAUDE.md (or an empty
-    // file) to the ignored .devcontainer/host/, and creates the directory with this repository's
-    // deploy settings if it is missing, so both mounts below work for everyone
-    "initializeCommand": "mkdir -p .devcontainer/host ~/.config/dev-kit/myapp && { cp ~/.claude/CLAUDE.md .devcontainer/host/CLAUDE.md 2>/dev/null || : > .devcontainer/host/CLAUDE.md; }",
+    // file) to ~/.config/dev-kit/, outside of the workspace, which the container can write, and
+    // creates the directories with the managed Claude Code settings and this repository's deploy
+    // settings if they are missing, so the mounts below work for everyone
+    "initializeCommand": "mkdir -p ~/.config/dev-kit/claude-code ~/.config/dev-kit/myapp && { cp ~/.claude/CLAUDE.md ~/.config/dev-kit/CLAUDE.md 2>/dev/null || : > ~/.config/dev-kit/CLAUDE.md; }",
     // root so docker-in-docker can start dockerd; VS Code, its terminals and Claude Code run as dev
     "containerUser": "root",
     "remoteUser": "dev",
@@ -19,8 +20,12 @@
         "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false },
         "ghcr.io/kebapboy/dev-kit/dev-kit:1": {}
     },
+    // .devcontainer read-only, so code in the container cannot change what the host runs
+    // (initializeCommand) or how it starts the container
     "mounts": [
-        "source=${localWorkspaceFolder}/.devcontainer/host/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+        "source=${localWorkspaceFolder}/.devcontainer,target=${containerWorkspaceFolder}/.devcontainer,type=bind,readonly",
+        "source=${localEnv:HOME}/.config/dev-kit/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+        "source=${localEnv:HOME}/.config/dev-kit/claude-code,target=/etc/claude-code,type=bind,readonly",
         "source=${localEnv:HOME}/.config/dev-kit/myapp,target=/etc/dev-kit,type=bind,readonly"
     ],
     "forwardPorts": [8000],

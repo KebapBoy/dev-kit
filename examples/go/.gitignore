@@ -1,4 +1,2 @@
 /myapp
 .env
-# Devcontainer: copy of the host's ~/.claude/CLAUDE.md
-.devcontainer/host/
