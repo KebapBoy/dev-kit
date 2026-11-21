@@ -3,7 +3,7 @@
 Shared tooling for a family of small self-hosted projects: what every repository needs in the same way comes from here instead of being copied into each one.
 
 - **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once.
-- **The `dev-kit` command**, installed by the feature: releases from the changelog.
+- **The `dev-kit` command**, installed by the feature: releases from the changelog, and deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook.
 
 ## The devcontainer feature
 
@@ -89,6 +89,28 @@ The first command works on `main` and pushes nothing. It checks that the working
 3. commits `chore: release 1.4.0` with the summary as body and tags `v1.4.0`, both signed if git has a signing key.
 
 `dev-kit release --push` pushes `main` and the release tag on `HEAD` in one atomic push.
+
+### Deploys
+
+`dev-kit deploy` deploys a released `main` to the repository's Dockhand git stack, which follows `main` with auto-update off, so only this command (or someone in Dockhand) deploys:
+
+1. It fetches `origin` and refuses unless `origin/main` carries a release tag `v<x.y.z>` that is on `origin` too. Forks, which deploy `main` without releases, use `dev-kit deploy --fork`. This check is a guardrail of the command, not of Dockhand: the webhook deploys whatever `main` is when Dockhand pulls it.
+2. It calls the stack's webhook: a POST signed with HMAC-SHA256 in `X-Hub-Signature-256`, like a GitHub webhook. The secret never leaves the container, and neither the secret nor the signature appears in a command line. Dockhand pulls `main`, builds and starts the stack, and answers when it is done.
+3. It waits until the app's health URL answers with the new version in its body (for `--fork`: until it answers at all).
+
+The container needs no Dockhand token: the webhook can only redeploy that one stack.
+
+**Settings** live on the host, outside of git, one directory per repository: `~/.config/dev-kit/<repository>/deploy.env` (see [config.example/deploy.env](config.example/deploy.env)). It is read as `KEY=VALUE` data, nothing in it runs. The repository's `devcontainer.json` mounts that directory read-only at `/etc/dev-kit`, so a container sees only the settings of its own repository. Because a bind mount fails without its source, `initializeCommand` creates the directory first:
+
+```jsonc
+"initializeCommand": "mkdir -p .devcontainer/host ~/.config/dev-kit/myapp && { cp ~/.claude/CLAUDE.md .devcontainer/host/CLAUDE.md 2>/dev/null || : > .devcontainer/host/CLAUDE.md; }",
+"mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/host/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+    "source=${localEnv:HOME}/.config/dev-kit/myapp,target=/etc/dev-kit,type=bind,readonly"
+]
+```
+
+In Dockhand, turn on the webhook of the git stack and give it a long random secret. The webhook URL must be reachable from the devcontainer: Dockhand is usually behind a reverse proxy with single sign-on, so let exactly the path `/api/git/stacks/<id>/webhook` through without it, for POST only and only from your own network; the signature protects it. The webhook has no replay protection: whoever sees a signed request can send it again and redeploy `main`, so use https.
 
 ## License
 

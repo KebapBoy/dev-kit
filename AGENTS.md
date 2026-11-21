@@ -9,7 +9,8 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 ## Architecture
 
 - **The devcontainer feature** (`src/dev-kit/`) follows the [devcontainer feature spec](https://containers.dev/implementors/features/): `devcontainer-feature.json` declares options, environment, the shared volume and the VS Code extension; `install.sh` runs as root while the image is built and installs everything. The `dev-kit` command is a bash dispatcher; each command is `lib/<command>.sh` with a function `cmd_<command>`, installed to `/usr/local/lib/dev-kit/`.
-- Nothing in this repository knows a real installation. Everything specific to one (URLs, webhook secrets, the MCP servers someone uses) comes at runtime from configuration on the host, outside of git.
+- Nothing in this repository knows a real installation. Everything specific to one (URLs, webhook secrets, the MCP servers someone uses) comes at runtime from configuration on the host, outside of git: `deploy` reads `/etc/dev-kit/deploy.env`, which the repository's devcontainer mounts from `~/.config/dev-kit/<repository>/`. Settings files are parsed as `KEY=VALUE` data, never sourced.
+- Secrets never appear in a command line (other processes can read those), and neither does what stands for them: `deploy` computes its HMAC with `printf` (a builtin) and `openssl dgst` on stdin, not with `openssl -hmac <key>`, and hands the signature header to curl through a file descriptor. Error messages never print a line of a settings file.
 
 ## Layout
 
@@ -18,8 +19,9 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 | `src/dev-kit/devcontainer-feature.json`       | The feature: options, `CLAUDE_CONFIG_DIR`, the volume `dev-kit-claude`, the VS Code extension |
 | `src/dev-kit/install.sh`                      | Installs packages, just, Claude Code, the configuration directory and `dev-kit` (POSIX sh: runs before bash exists on Alpine) |
 | `src/dev-kit/bin/dev-kit`                     | The `dev-kit` command: dispatches to `lib/<command>.sh` |
-| `src/dev-kit/lib/`                            | `common.sh` (helpers) and one file per command: `release.sh` |
+| `src/dev-kit/lib/`                            | `common.sh` (helpers) and one file per command: `release.sh`, `deploy.sh` |
 | `test/dev-kit/`                               | Feature tests: `test.sh` and one script per scenario in `scenarios.json` (Debian, Alpine, without just); `commands.sh` tests the commands in throwaway repositories, without network |
+| `config.example/deploy.env`                   | Example of the deploy settings a repository keeps on the host |
 | `VERSION`                                     | The version of dev-kit                      |
 | `justfile`                                    | Development commands (see below)            |
 | `.editorconfig`                               | Indentation, line endings and charset       |

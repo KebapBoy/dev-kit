@@ -134,9 +134,74 @@ test_release_push() {
         && git -C "$remote" rev-parse --quiet --verify refs/tags/v0.2.0 > /dev/null
 }
 
+# Runs bash code with a command file loaded: lib_run <command> <code> [<argument>...]; the code
+# sees the arguments as $1, $2, ...
+lib_run() {
+    local command=$1 code=$2
+    shift 2
+    bash -c "set -euo pipefail; source /usr/local/lib/dev-kit/common.sh; source /usr/local/lib/dev-kit/$command.sh; $code" \
+        _ "$@"
+}
+
+# The HMAC of deploy matches openssl's, also for a key longer than a block and for key bytes that
+# turn into zero bytes
+test_deploy_hmac() {
+    local key ours theirs
+    for key in s3cret 6666 "$(printf 'k%.0s' {1..80})"; do
+        # shellcheck disable=SC2016 # expanded by lib_run
+        ours=$(printf '%s' '{"a":1}' | lib_run deploy 'deploy_hmac_sha256 "$1"' "$key")
+        theirs=$(printf '%s' '{"a":1}' | openssl dgst -sha256 -hmac "$key" -r | cut -c1-64)
+        [[ ${#ours} -eq 64 && "$ours" == "$theirs" ]] || return 1
+    done
+}
+
+# The settings file is data: quotes are stripped, nothing in it runs, the secret is required
+test_deploy_config() {
+    local dir
+    dir=$(mktemp -d)
+    {
+        echo '# comment'
+        echo 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com/api/git/stacks/1/webhook'
+        echo "DEPLOY_WEBHOOK_SECRET=\"\$(touch $dir/ran)\""
+        echo "DEPLOY_TIMEOUT='30'"
+        echo 'OTHER=1'
+    } > "$dir/deploy.env"
+    # shellcheck disable=SC2016 # expanded by lib_run
+    lib_run deploy 'deploy_load_config "$1" && printf "%s|%s" "$DEPLOY_WEBHOOK_SECRET" "$DEPLOY_TIMEOUT"' \
+        "$dir/deploy.env" > "$dir/out" 2> /dev/null || return 1
+    [[ "$(cat "$dir/out")" == "\$(touch $dir/ran)|30" && ! -e "$dir/ran" ]] || return 1
+    echo 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com/x' > "$dir/deploy.env"
+    # shellcheck disable=SC2016 # expanded by lib_run
+    ! lib_run deploy 'deploy_load_config "$1"' "$dir/deploy.env" 2> /dev/null || return 1
+    # A broken line is reported by its number, never with its content
+    printf 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com/x\nDEPLOY_WEBHOOK_SECRET: hidden-value\n' > "$dir/deploy.env"
+    # shellcheck disable=SC2016 # expanded by lib_run
+    ! lib_run deploy 'deploy_load_config "$1"' "$dir/deploy.env" 2> "$dir/err" || return 1
+    grep -q 'line 2' "$dir/err" && ! grep -q hidden-value "$dir/err"
+}
+
+# deploy refuses an origin/main without a release tag, before it calls the webhook
+test_deploy_refuses_unreleased() {
+    local dir remote
+    remote=$(mktemp -d)
+    git init --quiet --bare "$remote"
+    dir=$(new_repo)
+    git -C "$dir" remote add origin "$remote"
+    commit_all "$dir"
+    git -C "$dir" push --quiet origin main
+    printf 'DEPLOY_WEBHOOK_URL=https://192.0.2.1/webhook\nDEPLOY_WEBHOOK_SECRET=x\n' > "$dir.env"
+    (cd "$dir" && ! dev-kit deploy --config "$dir.env" 2> "$dir.err") && grep -q 'is not a release' "$dir.err" || return 1
+    # A release tag that is only local is not a release either
+    git -C "$dir" tag -a v1.0.0 -m v1.0.0
+    (cd "$dir" && ! dev-kit deploy --config "$dir.env" 2> "$dir.err") && grep -q 'is not on origin' "$dir.err"
+}
+
 check "release: VERSION, changelog, commit and tag" test_release_version_file
 check "release: pyproject.toml without uv" test_release_pyproject
 check "release: version.go" test_release_version_go
 check "release: a top-level source wins over version.go" test_release_top_level_wins
 check "release: refuses what it must not release" test_release_refuses
 check "release: --push pushes main and the tag" test_release_push
+check "deploy: HMAC-SHA256 like openssl" test_deploy_hmac
+check "deploy: the settings are data, not code" test_deploy_config
+check "deploy: refuses an unreleased origin/main" test_deploy_refuses_unreleased

@@ -1,3 +1,3 @@
-# Your own deploy settings, never committed (see config.example/)
+# Real deploy settings are never committed; config.example/ holds the only example
 deploy.env
-.devcontainer/host/
+!config.example/deploy.env
