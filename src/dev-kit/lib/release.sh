@@ -97,7 +97,7 @@ cmd_release() {
     fi
     git tag "$sign" -m "v$version" -m "$summary" "v$version"
     info "released $version ($current -> $version, $source): commit $(git rev-parse --short HEAD), tag v$version"
-    info "push with: dev-kit release --push"
+    info "push with: dev-kit release --push (or on the host: dev-kit-host push <name> main v$version)"
 }
 
 # Pushes main and the release tag on HEAD, atomically

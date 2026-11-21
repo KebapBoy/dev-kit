@@ -1,0 +1,458 @@
+#!/usr/bin/env bash
+# dev-kit-host: the host side of a devcontainer whose configuration stays on the host and whose
+# code lives in a Docker volume. Run from the host folder of the devcontainer (the folder VS Code
+# opens, with .devcontainer/devcontainer.json and the copy of the repository's Dockerfile); its
+# initializeCommand calls "prepare".
+#
+# Code in the devcontainer can write anything in the volume. So the host builds and starts the
+# devcontainer only from its own copies, nothing from the volume runs on the host, and the
+# throwaway containers that touch the volume get no new privileges (a setuid program left in the
+# volume stays without effect), no capabilities (only the one that hands an empty volume to the
+# devcontainer user keeps CAP_CHOWN) and, except for cloning, no network.
+set -euo pipefail
+
+# git for the throwaway containers (alpine/git, pinned by digest)
+GIT_IMAGE="alpine/git:v2.52.0@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4657c7bdc4017387f591cc"
+# The user of the devcontainer, who owns the files in the volume
+DEV_UID=1000
+CONFIG_DIR="$HOME/.config/dev-kit"
+# The files the host keeps a copy of: in the repository, and here
+REPO_FILES=(.devcontainer/devcontainer.json Dockerfile)
+HOST_FILES=(.devcontainer/devcontainer.json .devcontainer/Dockerfile)
+# At most this much of a file from the volume is read, within this many seconds
+MAX_BYTES=1048576
+MAX_SECONDS=20
+
+# ssh needs a user name for the UID it runs as, which the image does not have
+PASSWD=$(mktemp)
+PUSH_VOLUME=
+cleanup() {
+    rm -f "$PASSWD"
+    if [[ -n $PUSH_VOLUME ]]; then
+        docker volume rm "$PUSH_VOLUME" > /dev/null 2>&1 || :
+    fi
+}
+trap cleanup EXIT
+printf 'root:x:0:0:root:/root:/sbin/nologin\ndev:x:%s:%s:dev:/tmp:/sbin/nologin\n' "$DEV_UID" "$DEV_UID" > "$PASSWD"
+
+usage() {
+    cat << 'EOF'
+Usage: dev-kit-host prepare <name> <repository>
+       dev-kit-host diff <name>
+       dev-kit-host show [--raw] <name> devcontainer.json|Dockerfile
+       dev-kit-host push [--yes] <name> <branch or tag>...
+
+Run in the host folder of a devcontainer, which holds .devcontainer/devcontainer.json and
+.devcontainer/Dockerfile: copies of the repository's files that you have read.
+
+prepare  Copies ~/.claude/CLAUDE.md to ~/.config/dev-kit/CLAUDE.md, creates ~/.config/dev-kit/
+         claude-code and ./etc if they are missing, clones <repository> (a git URL, or the path
+         of a repository on the host) into the volume <name>-workspace if it has no repository
+         yet, records <repository> in ./repository for push, and warns if the repository's
+         .devcontainer/devcontainer.json or Dockerfile differs from the copy here. For an SSH
+         repository it also creates ./etc/deploy-key (a key for a read-only deploy key of the
+         repository, for fetching in the devcontainer) if it is missing, and copies the server's
+         host keys from ~/.ssh/known_hosts to ./etc/known_hosts.
+diff     Shows how the repository's files differ from the copies here.
+show     Shows one of the repository's files; with --raw unchanged, to save it into a file
+         (never to a terminal).
+push     Pushes branches and tags from the volume to the repository recorded by prepare, after
+         showing what is new and asking (--yes: without asking). The devcontainer itself gets
+         only an agent that can sign, not push; this is the way out.
+
+diff and show make control characters visible: what the repository holds was written in the
+container. Read it before you take anything over into the copies here.
+EOF
+}
+
+fail() {
+    echo "dev-kit-host: $*" >&2
+    exit 1
+}
+
+check_args() {
+    local count=$1
+    shift
+    [[ $# -eq $count ]] || {
+        usage >&2
+        exit 2
+    }
+}
+
+check_name() {
+    [[ $1 =~ ^[a-z0-9][a-z0-9_.-]*$ ]] || fail "invalid name '$1' (lower-case letters, digits, '_', '.', '-')"
+    [[ $1 != claude-code && $1 != bin ]] || fail "the name '$1' is taken by ~/.config/dev-kit/$1"
+}
+
+check_volume() {
+    docker volume inspect "$1" > /dev/null 2>&1 || fail "there is no volume $1"
+}
+
+check_folder() {
+    [[ -f .devcontainer/devcontainer.json ]] \
+        || fail "run this in the host folder of the devcontainer (no .devcontainer/devcontainer.json in $PWD)"
+}
+
+# A throwaway container of the git image: no capabilities, no new privileges, no network unless
+# the caller adds one, a read-only root, a memory and process limit. The image declares a volume
+# at /git, which gets a tmpfs instead of an anonymous volume.
+throwaway() {
+    docker run --rm --init --cap-drop ALL --security-opt no-new-privileges --read-only \
+        --memory 256m --pids-limit 64 --mount type=tmpfs,dst=/git --mount type=tmpfs,dst=/tmp \
+        --mount "type=bind,src=$PASSWD,dst=/etc/passwd,readonly" -e HOME=/tmp "$@"
+}
+
+# Runs a shell command as the devcontainer user with the volume read-only at /src, without network
+in_volume() {
+    throwaway --network none --user "$DEV_UID:$DEV_UID" \
+        --mount "type=volume,src=$1,dst=/src,readonly,volume-nocopy" -w /src \
+        --entrypoint sh "$GIT_IMAGE" -c "$2"
+}
+
+# Prints at most MAX_BYTES of a file in the volume (nothing if it is missing)
+volume_file() {
+    in_volume "$1" "if [ -f '$2' ]; then timeout $MAX_SECONDS head -c $MAX_BYTES '$2'; fi"
+}
+
+# Prints the SSH server of a repository URL (nothing for a path or https), with a port other than
+# 22 as known_hosts writes it: [host]:port
+ssh_host() {
+    if [[ $1 =~ ^(git\+)?ssh(\+git)?://([^@/]+@)?([^:/]+)(:([0-9]+))? ]]; then
+        if [[ -n ${BASH_REMATCH[6]} && ${BASH_REMATCH[6]} != 22 ]]; then
+            echo "[${BASH_REMATCH[4]}]:${BASH_REMATCH[6]}"
+        else
+            echo "${BASH_REMATCH[4]}"
+        fi
+    elif [[ $1 != *://* && $1 =~ ^([^@/:]+@)?([^:/]+): ]]; then
+        echo "${BASH_REMATCH[2]}"
+    fi
+}
+
+# Sets REMOTE_ARGS (docker run options) and REMOTE_URL (for git in the container) for a repository:
+# a path on the host is mounted at /origin (read-only unless $2 is rw); for SSH the container gets
+# the agent that ssh on the host uses for that host (IdentityAgent, else SSH_AUTH_SOCK) and only
+# the host keys you already trust.
+remote_access() {
+    local repository=$1 mode=${2:-ro} host agent
+    REMOTE_ARGS=()
+    REMOTE_URL=$repository
+    if [[ $repository == /* ]]; then
+        [[ -d $repository ]] || fail "no repository at $repository"
+        local bind="type=bind,src=$repository,dst=/origin"
+        [[ $mode == rw ]] || bind+=",readonly"
+        REMOTE_ARGS=(--network none --mount "$bind")
+        REMOTE_URL=/origin
+        return
+    fi
+    host=$(ssh_host "$repository")
+    if [[ -n $host ]]; then
+        host=${host#[}
+        # ssh -G has already expanded ~, ${VAR} and %-tokens in the path
+        agent=$(ssh -G -- "${host%]:*}" 2> /dev/null | awk '$1 == "identityagent" { sub(/^identityagent /, ""); print }')
+        case $agent in
+            "" | SSH_AUTH_SOCK) agent=${SSH_AUTH_SOCK:-} ;;
+            none) agent= ;;
+        esac
+        if [[ -S $agent ]]; then
+            REMOTE_ARGS+=(--mount "type=bind,src=$agent,dst=/run/ssh-agent" -e SSH_AUTH_SOCK=/run/ssh-agent)
+        else
+            echo "dev-kit-host: warning: no ssh agent for ${host%]:*} (IdentityAgent in ~/.ssh/config, or SSH_AUTH_SOCK)" >&2
+        fi
+    fi
+    if [[ -f $HOME/.ssh/known_hosts ]]; then
+        REMOTE_ARGS+=(--mount "type=bind,src=$HOME/.ssh/known_hosts,dst=/run/known_hosts,readonly")
+    fi
+    REMOTE_ARGS+=(-e "GIT_SSH_COMMAND=ssh -o UserKnownHostsFile=/run/known_hosts -o StrictHostKeyChecking=yes")
+}
+
+# Hands a fresh volume to the devcontainer user (the only container that keeps a capability)
+own_volume() {
+    throwaway --network none --cap-add CHOWN --mount "type=volume,src=$1,dst=/src,volume-nocopy" \
+        --entrypoint chown "$GIT_IMAGE" "$DEV_UID:$DEV_UID" /src
+}
+
+# git without hooks, fsmonitor and git-lfs (the image enables it; .lfsconfig could send it on)
+SAFE_GIT=(-c core.hooksPath=/dev/null -c core.fsmonitor=false -c filter.lfs.process=
+    -c filter.lfs.smudge= -c filter.lfs.required=false)
+
+clone() {
+    local volume=$1 repository=$2
+    local mount="type=volume,src=$volume,dst=/src,volume-nocopy"
+    # Code in a container on the volume could put hooks into the clone while git writes it
+    if [[ -n $(docker ps -aq --filter "volume=$volume") ]]; then
+        fail "the volume $volume has no repository, but a container uses it; remove that container first"
+    fi
+    # shellcheck disable=SC2016 # runs in the container
+    if ! in_volume "$volume" 'test -r . -a -x . && test -z "$(ls -A)"'; then
+        fail "the volume $volume has files but no repository; look at it and empty it first"
+    fi
+    remote_access "$repository"
+    echo "dev-kit-host: cloning $repository into the volume $volume"
+    own_volume "$volume"
+    throwaway "${REMOTE_ARGS[@]}" --mount "$mount" --user "$DEV_UID:$DEV_UID" "$GIT_IMAGE" \
+        "${SAFE_GIT[@]}" clone --quiet --template= -- "$REMOTE_URL" /src
+    if [[ $REMOTE_URL != "$repository" ]]; then
+        throwaway --network none --mount "$mount" --user "$DEV_UID:$DEV_UID" -w /src "$GIT_IMAGE" \
+            "${SAFE_GIT[@]}" remote set-url origin "$repository"
+    fi
+}
+
+# For fetching in the devcontainer: a key for a read-only deploy key of the repository, and the
+# host keys of its server that you already trust
+deploy_key() {
+    local name=$1 host
+    host=$(ssh_host "$2")
+    [[ -n $host ]] || return 0
+    if [[ ! -f etc/deploy-key ]]; then
+        ssh-keygen -q -t ed25519 -N '' -C "dev-kit $name read-only deploy key" -f etc/deploy-key
+        echo "dev-kit-host: created etc/deploy-key. Add it to the repository as a read-only deploy key" \
+            "(GitHub: Settings, Deploy keys, without write access), so the devcontainer can fetch:" >&2
+        cat etc/deploy-key.pub >&2
+    fi
+    ssh-keygen -F "$host" -f "$HOME/.ssh/known_hosts" 2> /dev/null | grep -v '^#' > etc/known_hosts.new || :
+    if [[ -s etc/known_hosts.new ]]; then
+        mv etc/known_hosts.new etc/known_hosts
+    else
+        rm -f etc/known_hosts.new
+        echo "dev-kit-host: warning: $host is not in ~/.ssh/known_hosts; connect once with ssh to trust it" >&2
+    fi
+}
+
+cmd_prepare() {
+    check_args 2 "$@"
+    local name=$1 repository=$2
+    check_name "$name"
+    check_folder
+    local volume="$name-workspace" i
+
+    mkdir -p "$CONFIG_DIR/claude-code" etc
+    cp ~/.claude/CLAUDE.md "$CONFIG_DIR/CLAUDE.md" 2> /dev/null || : > "$CONFIG_DIR/CLAUDE.md"
+
+    # Where push pushes to: changing it is a decision, not a side effect of an edited initializeCommand
+    if [[ -s repository && $(< repository) != "$repository" ]]; then
+        fail "./repository records another repository than $repository; delete ./repository if it moved"
+    fi
+    docker volume inspect "$volume" > /dev/null 2>&1 || docker volume create "$volume" > /dev/null
+    if ! in_volume "$volume" 'test -e .git'; then
+        clone "$volume" "$repository"
+    fi
+    printf '%s\n' "$repository" > repository
+    deploy_key "$name" "$repository"
+
+    for i in "${!REPO_FILES[@]}"; do
+        if [[ -f ${HOST_FILES[i]} ]] && ! volume_file "$volume" "${REPO_FILES[i]}" | cmp -s - "${HOST_FILES[i]}"; then
+            echo "dev-kit-host: warning: the repository's ${REPO_FILES[i]} differs from" \
+                "${HOST_FILES[i]} here, which is the one that counts. See: dev-kit-host diff $name" >&2
+        fi
+    done
+}
+
+cmd_diff() {
+    check_args 1 "$@"
+    check_name "$1"
+    check_folder
+    check_volume "$1-workspace"
+    local i status=0
+    for i in "${!REPO_FILES[@]}"; do
+        [[ -f ${HOST_FILES[i]} ]] || continue
+        # cat -v: what the repository holds must not reach the terminal as control characters
+        diff -u --label "host: ${HOST_FILES[i]}" --label "repository: ${REPO_FILES[i]}" \
+            "${HOST_FILES[i]}" <(volume_file "$1-workspace" "${REPO_FILES[i]}") | cat -v || status=1
+    done
+    return $status
+}
+
+cmd_show() {
+    local raw=false
+    if [[ ${1:-} == --raw ]]; then
+        raw=true
+        shift
+    fi
+    check_args 2 "$@"
+    check_name "$1"
+    check_folder
+    check_volume "$1-workspace"
+    local file
+    case $2 in
+        devcontainer.json) file=.devcontainer/devcontainer.json ;;
+        Dockerfile) file=Dockerfile ;;
+        *) fail "show takes devcontainer.json or Dockerfile" ;;
+    esac
+    if ! $raw; then
+        volume_file "$1-workspace" "$file" | cat -v
+    elif [[ -t 1 ]]; then
+        fail "show --raw writes into a file, not to a terminal: dev-kit-host show --raw $1 $2 > <file>"
+    else
+        volume_file "$1-workspace" "$file"
+    fi
+}
+
+# in_push <volume> <script> [<docker options>...] -- [<arguments>...]: runs a shell script as the
+# devcontainer user with the push volume at /push. Everything it prints, on stdout and stderr,
+# comes from the volume or the remote, so it goes through cat -v (which also turns bytes above 0x7f
+# into M- notation, so no C1 control reaches the terminal).
+in_push() {
+    local volume=$1 script=$2 options=()
+    shift 2
+    while [[ $1 != -- ]]; do
+        options+=("$1")
+        shift
+    done
+    shift
+    throwaway --mount "type=volume,src=$volume,dst=/push,volume-nocopy" --user "$DEV_UID:$DEV_UID" \
+        "${options[@]}" --entrypoint sh "$GIT_IMAGE" -c "$script" sh "$@" 2>&1 | cat -v
+}
+
+# Takes the refs over from the volume: exact names only, a name must not be both a branch and a
+# tag, and every ref must end at a commit
+# shellcheck disable=SC2016 # runs in the container
+TAKE_OVER='
+    set -e
+    git init --quiet --bare --template= /push/repo.git
+    cd /push/repo.git
+    git config transfer.fsckObjects true
+    timeout 120 git ls-remote /src > /push/volume-refs
+    for ref in "$@"; do
+        branch=$(awk -v r="refs/heads/$ref" "\$2 == r" /push/volume-refs)
+        tag=$(awk -v r="refs/tags/$ref" "\$2 == r" /push/volume-refs)
+        if [ -n "$branch" ] && [ -n "$tag" ]; then
+            echo "dev-kit-host: $ref is a branch and a tag in the volume; rename one" >&2
+            exit 1
+        elif [ -n "$branch" ]; then
+            echo "refs/heads/$ref"
+        elif [ -n "$tag" ]; then
+            echo "refs/tags/$ref"
+        else
+            echo "dev-kit-host: no branch or tag $ref in the volume" >&2
+            exit 1
+        fi
+    done > /push/refs
+    timeout 600 git fetch --quiet --no-tags /src $(sed "s|.*|&:&|" /push/refs)
+    while read -r ref; do
+        if [ "$(git cat-file -t "$ref^{}")" != commit ]; then
+            echo "dev-kit-host: $ref does not point to a commit" >&2
+            exit 1
+        fi
+    done < /push/refs
+'
+
+# Shows everything the push would bring to the remote: every commit that is on no branch or tag
+# of the remote, and the files they change, for each branch and for each tag (a tag can bring
+# commits that are on no branch). Lines are cut, so a long subject cannot fake a line of its own.
+# shellcheck disable=SC2016 # runs in the container
+SHOW_NEW='
+    set -e
+    if ! timeout 300 git fetch --quiet --no-tags "$1" "+refs/heads/*:refs/remotes/origin/*" \
+        "+refs/tags/*:refs/remotes/origin-tags/*"; then
+        echo "dev-kit-host: could not fetch from the repository" >&2
+        exit 1
+    fi
+    branches=$(grep "^refs/heads/" /push/refs || :)
+    new() {
+        count=$(git rev-list --count "$@")
+        if [ "$count" -eq 0 ]; then
+            echo "  nothing new"
+            return
+        fi
+        echo "  $count new commit(s):"
+        git log --date=short --format="    %h %<(60,trunc)%s %<(20,trunc)%an %ad" "$@"
+        files=$(git log --format= --name-only --diff-merges=first-parent "$@" | sort -u)
+        [ -n "$files" ] || return 0
+        echo "  files they change (! = how it is built, run or deployed):"
+        printf "%s\n" "$files" \
+            | sed -E "s,^\"?(\.github/|\.devcontainer/|deploy/|(.*/)?(Dockerfile|justfile|compose\.ya?ml|\.git(attributes|modules)\"?$)),! &," \
+            | sed -E "s,^[^!],    &,; s,^! ,  ! ,"
+    }
+    while read -r ref; do
+        case $ref in
+            refs/heads/*)
+                branch=${ref#refs/heads/}
+                if git rev-parse -q --verify "refs/remotes/origin/$branch" > /dev/null; then
+                    echo "branch $branch:"
+                else
+                    echo "branch $branch (new on the remote):"
+                fi
+                new "$ref" --not --remotes
+                ;;
+            refs/tags/*)
+                echo "tag ${ref#refs/tags/} on $(git log -1 --format="%h %<(60,trunc)%s" "$ref^{}")"
+                git for-each-ref --format="%(if:equals=tag)%(objecttype)%(then)  annotated by %(taggername): %(contents:subject)%(end)" "$ref" | grep . || :
+                if [ "$(git rev-list --count "$ref^{}" --not --remotes $branches)" -gt 0 ]; then
+                    echo "  WARNING: the tag brings commits that are on no branch pushed here or on the remote"
+                    new "$ref^{}" --not --remotes $branches
+                fi
+                ;;
+        esac
+    done < /push/refs | cut -c -150 | sed "s/ *$//"
+'
+
+cmd_push() {
+    local yes=false
+    if [[ ${1:-} == --yes ]]; then
+        yes=true
+        shift
+    fi
+    [[ $# -ge 2 ]] || {
+        usage >&2
+        exit 2
+    }
+    local name=$1 ref
+    shift
+    check_name "$name"
+    check_folder
+    check_volume "$name-workspace"
+    for ref in "$@"; do
+        [[ $ref =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ && $ref != *..* && $ref != *.lock && $ref != */ ]] \
+            || fail "invalid branch or tag '$ref'"
+    done
+    [[ -s repository ]] || fail "no ./repository here: prepare records it"
+    local repository
+    repository=$(< repository)
+    if ! $yes && [[ ! -t 0 || ! -r /dev/tty ]]; then
+        fail "push asks before it pushes and needs a terminal for that (or --yes)"
+    fi
+
+    # A fresh bare repository on a volume of its own (a new one for every push) takes the refs
+    # over from the workspace: git there reads only refs and objects from the volume, never its
+    # configuration or hooks, and runs without network or agent
+    local push
+    push="$name-push-$(date +%Y%m%d%H%M%S)-$RANDOM"
+    ! docker volume inspect "$push" > /dev/null 2>&1 || fail "the volume $push exists already"
+    docker volume create --label "dev-kit-host.push=$name" "$push" > /dev/null
+    PUSH_VOLUME=$push
+    own_volume "$push"
+    in_push "$push" "$TAKE_OVER" --network none \
+        --mount "type=volume,src=$name-workspace,dst=/src,readonly,volume-nocopy" -- "$@" \
+        || fail "could not take the refs over from the volume"
+
+    # What is new against the remote; the push sends exactly what was shown, from the push volume,
+    # which no devcontainer can reach
+    remote_access "$repository" rw
+    echo "dev-kit-host: new in $repository:"
+    in_push "$push" "$SHOW_NEW" "${REMOTE_ARGS[@]}" -w /push/repo.git -- "$REMOTE_URL" \
+        || fail "could not compare with $repository"
+
+    if ! $yes; then
+        local answer
+        read -r -p "Push this to $repository? [y/N] " answer < /dev/tty
+        [[ $answer == [yYjJ] ]] || fail "not pushed"
+    fi
+    # shellcheck disable=SC2016 # runs in the container
+    in_push "$push" 'timeout 600 git push --atomic "$1" $(sed "s|.*|&:&|" /push/refs)' \
+        "${REMOTE_ARGS[@]}" -w /push/repo.git -- "$REMOTE_URL"
+}
+
+case "${1:-}" in
+    prepare | diff | show | push)
+        command=$1
+        shift
+        "cmd_$command" "$@"
+        ;;
+    -h | --help | help)
+        usage
+        ;;
+    *)
+        usage >&2
+        exit 2
+        ;;
+esac

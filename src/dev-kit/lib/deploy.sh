@@ -79,7 +79,7 @@ deploy_require_remote_tag() {
     # An annotated tag is listed twice; the line with ^{} names its commit
     remote_commit=$(awk -v r="refs/tags/$tag^{}" '$2 == r { print $1 }' <<< "$refs")
     [[ -n "$remote_commit" ]] || remote_commit=$(awk -v r="refs/tags/$tag" '$2 == r { print $1 }' <<< "$refs")
-    [[ "$remote_commit" == "$commit" ]] || die "$tag is not on origin at ${commit:0:7}; push it with: dev-kit release --push"
+    [[ "$remote_commit" == "$commit" ]] || die "$tag is not on origin at ${commit:0:7}; push it with: dev-kit release --push (or on the host: dev-kit-host push <name> main $tag)"
 }
 
 # Reads the settings from KEY=VALUE lines (no shell: nothing in the file runs). Errors name the line

@@ -24,5 +24,40 @@
                 "justVersion": "none"
             }
         }
+    },
+    "docker-debian": {
+        "image": "mcr.microsoft.com/devcontainers/base:trixie",
+        "remoteUser": "vscode",
+        "updateRemoteUserUID": false,
+        "runArgs": ["--runtime=sysbox-runc"],
+        "features": {
+            "dev-kit": {
+                "docker": true
+            }
+        }
+    },
+    "docker-debian-user": {
+        "image": "node:26.13.0-trixie-slim",
+        "containerUser": "node",
+        "remoteUser": "node",
+        "updateRemoteUserUID": false,
+        "runArgs": ["--runtime=sysbox-runc"],
+        "features": {
+            "dev-kit": {
+                "docker": true
+            }
+        }
+    },
+    "docker-alpine-user": {
+        "image": "node:26.13.0-alpine3.24",
+        "containerUser": "node",
+        "remoteUser": "node",
+        "updateRemoteUserUID": false,
+        "runArgs": ["--runtime=sysbox-runc"],
+        "features": {
+            "dev-kit": {
+                "docker": true
+            }
+        }
     }
 }

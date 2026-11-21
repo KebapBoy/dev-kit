@@ -28,7 +28,8 @@ serve:
 demo:
     docker compose up --build
 
-# Prepare a release (changelog, version, commit, tag); push it with: dev-kit release --push
+# Prepare a release (changelog, version, commit, tag); the devcontainer cannot push, so push it on
+# the host with: dev-kit-host push myapp main v<version>
 release version summary:
     dev-kit release "$1" -m "$2"
 
