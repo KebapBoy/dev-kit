@@ -22,6 +22,9 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 | `src/dev-kit/lib/`                            | `common.sh` (helpers) and one file per command: `release.sh`, `deploy.sh`, `fork-sync.sh` |
 | `test/dev-kit/`                               | Feature tests: `test.sh` and one script per scenario in `scenarios.json` (Debian, Alpine, without just); `commands.sh` tests the commands in throwaway repositories, without network |
 | `config.example/deploy.env`                   | Example of the deploy settings a repository keeps on the host |
+| `.github/workflows/check.yaml`                | On every push and pull request: `just check` and the feature tests |
+| `.github/workflows/publish.yaml`              | On a tag `v<x.y.z>`: publishes the feature to `ghcr.io/<owner>/dev-kit/dev-kit` with the version from the tag |
+| `.github/install-just.sh`                     | Installs the just release of the feature in the workflows |
 | `VERSION`                                     | The version of dev-kit                      |
 | `justfile`                                    | Development commands (see below)            |
 | `.editorconfig`                               | Indentation, line endings and charset       |
@@ -33,15 +36,20 @@ Development needs only Docker and just: the tools run in containers with fixed v
 
 | Command      | Does                                                                                           |
 | ------------ | ---------------------------------------------------------------------------------------------- |
-| `just check` | shfmt and shellcheck on every script                                                           |
+| `just check` | shfmt and shellcheck on every script, actionlint on the workflows                              |
 | `just fmt`   | Format every script with shfmt                                                                 |
 | `just test`  | Build the feature in every test scenario and run its tests (uses the real `dev-kit-claude` volume; the tests only create and remove a file in it) |
+
+### Releasing
+
+dev-kit releases itself with its own command: `dev-kit release <x.y.z> -m <summary>` (version source `VERSION`), then `dev-kit release --push`. The tag starts `publish.yaml`, which waits for approval in the environment `release` (set a required reviewer in the repository settings, so a pushed tag alone publishes nothing), checks that tag and `VERSION` match, writes the version into `devcontainer-feature.json` (it stays `0.0.0` in git) and publishes the feature; repositories use it as `ghcr.io/kebapboy/dev-kit/dev-kit:<major>`. A new package on ghcr.io is private: after the first publish, make it public once in the package settings on GitHub.
 
 ## Conventions
 
 - This repository is public. Use `example.com`, `192.0.2.x` and generic names (`myapp`) in code, docs, tests and commit messages. Never commit real domains, IP addresses, user or host names, stack IDs, tokens or secrets.
 - Scripts: `install.sh` is POSIX sh, everything else bash with `set -euo pipefail`. shfmt with `-i 4 -bn -ci -sr` (`just fmt`), shellcheck clean. Every download is pinned and its checksum verified (Claude Code's own installer verifies what it downloads).
 - The feature must work on Debian (apt) and Alpine (apk) images and for any remote user with UID 1000; nothing may assume a user name or home directory.
+- GitHub Actions are pinned to a commit SHA with the version as a comment; workflows get only the permissions they need.
 - Identifiers, comments and docs in English. 4 spaces everywhere (also JSON, YAML, Markdown), tabs only where Go requires them.
 
 ## With every change

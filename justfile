@@ -3,18 +3,21 @@
 
 shellcheck_image := "koalaman/shellcheck:v0.11.0"
 shfmt_image := "mvdan/shfmt:v3.12.0"
-scripts := "src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib test/dev-kit"
+actionlint_image := "rhysd/actionlint:1.7.12"
+scripts := "src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib test/dev-kit .github/install-just.sh"
 devcontainer_cli := "@devcontainers/cli@0.80.1"
 
 # List the recipes
 default:
     @just --list
 
-# All checks: formatting (shfmt) and shellcheck on every script
+# All checks: formatting (shfmt) and shellcheck on every script, actionlint on the workflows
 check:
     docker run --rm -v "$PWD:/mnt:ro" -w /mnt {{ shfmt_image }} -d -i 4 -bn -ci -sr {{ scripts }}
     docker run --rm -v "$PWD:/mnt:ro" -w /mnt {{ shellcheck_image }} -x \
-        src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib/*.sh test/dev-kit/*.sh
+        src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib/*.sh test/dev-kit/*.sh \
+        .github/install-just.sh
+    docker run --rm -v "$PWD:/repo:ro" -w /repo {{ actionlint_image }}
 
 # Build the feature in every scenario of test/dev-kit/scenarios.json and run its tests
 test:
