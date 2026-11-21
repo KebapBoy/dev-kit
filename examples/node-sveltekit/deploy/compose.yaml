@@ -1,0 +1,37 @@
+# myapp for a real installation behind a reverse proxy, as a Dockhand git stack with the compose
+# path deploy/compose.yaml. Set the variables below in the stack's environment (keys and comments:
+# .env.example). The stack follows main with auto-update off; "dev-kit deploy" deploys a release
+# through the stack's webhook.
+services:
+    myapp:
+        build: ..
+        image: myapp:local
+        restart: unless-stopped
+        environment:
+            TZ: ${TZ:-UTC}
+            # Public URL, e.g. https://myapp.example.com
+            ORIGIN: ${ORIGIN:?set ORIGIN}
+            APP_SECRET: ${APP_SECRET:?set APP_SECRET}
+        volumes:
+            - data:/data
+        # Hardening: read-only image (state only in /data, scratch in /tmp), no capabilities,
+        # no gaining privileges
+        read_only: true
+        tmpfs:
+            - /tmp
+        cap_drop:
+            - ALL
+        security_opt:
+            - no-new-privileges:true
+        networks:
+            - proxy
+        # No published port: only the reverse proxy talks to it (port 3000)
+
+volumes:
+    data:
+
+networks:
+    # The network your reverse proxy is in
+    proxy:
+        name: ${MYAPP_PROXY_NETWORK:-proxy}
+        external: true

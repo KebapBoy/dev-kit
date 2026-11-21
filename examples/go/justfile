@@ -1,0 +1,35 @@
+# Development commands of myapp (see AGENTS.md, "Development"). AGENTS.md, skills and scripts call
+# these recipes, not the tools.
+
+set positional-arguments
+set dotenv-load
+
+# List the recipes
+default:
+    @just --list
+
+# Formatting, linters (golangci-lint with go vet and staticcheck), tests with the race detector
+check:
+    golangci-lint fmt --diff
+    golangci-lint run
+    go test -race ./...
+
+# Format (gofmt, goimports)
+fmt:
+    golangci-lint fmt
+
+# The app from the working tree on port 8000
+serve:
+    MYAPP_ADDR=:8000 MYAPP_DATA_DIR=/tmp/myapp-dev go run ./cmd/myapp
+
+# The demo: the image with the sample data, at http://127.0.0.1:8080
+demo:
+    docker compose up --build
+
+# Prepare a release (changelog, version, commit, tag); push it with: dev-kit release --push
+release version summary:
+    dev-kit release "$1" -m "$2"
+
+# Deploy the release on origin/main and wait for it
+deploy:
+    dev-kit deploy

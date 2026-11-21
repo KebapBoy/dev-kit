@@ -1,0 +1,35 @@
+# Development commands of myapp (see AGENTS.md, "Development"). AGENTS.md, skills and scripts call
+# these recipes, not the tools.
+
+set positional-arguments
+set dotenv-load
+
+# List the recipes
+default:
+    @just --list
+
+# Coding style (PHP-CS-Fixer), static analysis (PHPStan), tests (PHPUnit)
+check:
+    vendor/bin/php-cs-fixer check --diff
+    vendor/bin/phpstan analyse
+    vendor/bin/phpunit
+
+# Format (PHP-CS-Fixer)
+fmt:
+    vendor/bin/php-cs-fixer fix
+
+# The app from the working tree on port 8000 (PHP's built-in server, every request to index.php)
+serve:
+    MYAPP_DATA_DIR=/tmp/myapp-dev php -S 0.0.0.0:8000 -t public public/index.php
+
+# The demo: the image with the sample data, at http://127.0.0.1:8080
+demo:
+    docker compose up --build
+
+# Prepare a release (changelog, version, commit, tag); push it with: dev-kit release --push
+release version summary:
+    dev-kit release "$1" -m "$2"
+
+# Deploy the release on origin/main and wait for it
+deploy:
+    dev-kit deploy

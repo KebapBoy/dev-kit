@@ -1,0 +1,40 @@
+// Devcontainer: stage "dev" of the Dockerfile, the dev-kit feature (Claude Code with the shared
+// configuration, git, just, dev-kit) and Docker inside (docker-in-docker) for just demo.
+// .devcontainer/serve.sh runs the app from the working tree on port 8000.
+{
+    "name": "myapp",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "context": "..",
+        "target": "dev"
+    },
+    // Runs on the host before the container starts: copies your ~/.claude/CLAUDE.md (or an empty
+    // file) to the ignored .devcontainer/host/, and creates the directory with this repository's
+    // deploy settings if it is missing, so both mounts below work for everyone
+    "initializeCommand": "mkdir -p .devcontainer/host ~/.config/dev-kit/myapp && { cp ~/.claude/CLAUDE.md .devcontainer/host/CLAUDE.md 2>/dev/null || : > .devcontainer/host/CLAUDE.md; }",
+    // root so docker-in-docker can start dockerd; VS Code, its terminals and Claude Code run as dev
+    "containerUser": "root",
+    "remoteUser": "dev",
+    "features": {
+        "ghcr.io/devcontainers/features/docker-in-docker:2": { "moby": false },
+        "ghcr.io/kebapboy/dev-kit/dev-kit:1": {}
+    },
+    "mounts": [
+        "source=${localWorkspaceFolder}/.devcontainer/host/CLAUDE.md,target=/var/lib/dev-kit/claude/CLAUDE.md,type=bind,readonly",
+        "source=${localEnv:HOME}/.config/dev-kit/myapp,target=/etc/dev-kit,type=bind,readonly"
+    ],
+    "forwardPorts": [8000],
+    "portsAttributes": {
+        "8000": { "label": "myapp (working tree)" },
+        "8080": { "label": "myapp (demo)", "onAutoForward": "silent" }
+    },
+    "postCreateCommand": "{ test -f .env || cp .env.example .env; } && go mod download",
+    // VS Code runs this in a terminal that hangs up when the command returns: the dev server
+    // ignores that (trap) and leaves the terminal's session (setsid)
+    "postStartCommand": "trap '' HUP; setsid .devcontainer/serve.sh > /tmp/serve.log 2>&1 &",
+    "customizations": {
+        "vscode": {
+            "extensions": ["golang.go", "editorconfig.editorconfig"]
+        }
+    }
+}

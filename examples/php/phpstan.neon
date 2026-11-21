@@ -1,0 +1,6 @@
+# PHPStan (just check)
+parameters:
+    level: 8
+    paths:
+        - public
+        - src

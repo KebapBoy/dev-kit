@@ -1,0 +1,8 @@
+# Allowlist: only what the image needs goes into the build context
+*
+!composer.json
+!composer.lock
+!VERSION
+!public/
+!src/
+!docker/

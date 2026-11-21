@@ -1,0 +1,6 @@
+/vendor/
+.php-cs-fixer.cache
+.phpunit.cache/
+.env
+# Devcontainer: copy of the host's ~/.claude/CLAUDE.md
+.devcontainer/host/

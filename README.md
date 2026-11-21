@@ -4,6 +4,7 @@ Shared tooling for a family of small self-hosted projects: what every repository
 
 - **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once.
 - **The `dev-kit` command**, installed by the feature: releases from the changelog, deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook, and a look at what upstream has for a fork.
+- **[Examples](examples/README.md)** for new repositories in Node/SvelteKit, Python/uv, Go and PHP: Dockerfile, compose files for a demo and for a Dockhand installation, devcontainer, `justfile`, editor and linter settings, all wired up with the feature and the `dev-kit` command.
 
 ## The devcontainer feature
 

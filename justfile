@@ -4,20 +4,32 @@
 shellcheck_image := "koalaman/shellcheck:v0.11.0"
 shfmt_image := "mvdan/shfmt:v3.12.0"
 actionlint_image := "rhysd/actionlint:1.7.12"
-scripts := "src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib test/dev-kit .github/install-just.sh"
+scripts := "src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib test/dev-kit .github/install-just.sh examples/*/.devcontainer/serve.sh examples/php/docker/entrypoint.sh"
 devcontainer_cli := "@devcontainers/cli@0.80.1"
 
 # List the recipes
 default:
     @just --list
 
-# All checks: formatting (shfmt) and shellcheck on every script, actionlint on the workflows
-check:
+# All checks: formatting (shfmt) and shellcheck on every script, actionlint on the workflows, and
+# the compose files of the examples
+check: check-examples
     docker run --rm -v "$PWD:/mnt:ro" -w /mnt {{ shfmt_image }} -d -i 4 -bn -ci -sr {{ scripts }}
     docker run --rm -v "$PWD:/mnt:ro" -w /mnt {{ shellcheck_image }} -x \
         src/dev-kit/install.sh src/dev-kit/bin/dev-kit src/dev-kit/lib/*.sh test/dev-kit/*.sh \
-        .github/install-just.sh
+        .github/install-just.sh examples/*/.devcontainer/serve.sh examples/php/docker/entrypoint.sh
     docker run --rm -v "$PWD:/repo:ro" -w /repo {{ actionlint_image }}
+
+# The compose files of every example are valid (deploy/compose.yaml with every variable set)
+check-examples:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for dir in examples/*/; do
+        docker compose -f "$dir/compose.yaml" config --quiet
+        vars=$(grep -o '\${[A-Z_]*:?' "$dir/deploy/compose.yaml" | sed 's/^\${//; s/:?$//' | sort -u)
+        env $(printf '%s=example ' $vars) docker compose -f "$dir/deploy/compose.yaml" config --quiet
+        echo "$dir: compose files valid"
+    done
 
 # Build the feature in every scenario of test/dev-kit/scenarios.json and run its tests
 test:

@@ -1,0 +1,29 @@
+# Demo: myapp with the sample data from docs/sample, at http://127.0.0.1:8080 (just demo; other
+# port: DEMO_PORT=18080). The data lives in the volume "data"; "docker compose down -v" starts
+# afresh. For a real installation see deploy/compose.yaml.
+name: myapp-demo
+
+services:
+    myapp:
+        build: .
+        image: myapp:demo
+        environment:
+            TZ: Europe/Berlin
+        ports:
+            - 127.0.0.1:${DEMO_PORT:-8080}:8080
+        volumes:
+            - data:/data
+        depends_on:
+            seed:
+                condition: service_completed_successfully
+
+    # Copies the sample data into the volume once
+    seed:
+        image: myapp:demo
+        entrypoint: ["sh", "-c", "test -e /data/.seeded || { cp -r /sample/. /data/ && touch /data/.seeded; }"]
+        volumes:
+            - ./docs/sample:/sample:ro
+            - data:/data
+
+volumes:
+    data:
