@@ -22,6 +22,7 @@ Commands:
   release <x.y.z> -m <summary>   Turn [Unreleased] into a release: changelog, version, commit, tag
   release --push                 Push the release commit and its tag
   deploy [--fork]                Deploy the release on origin/main through the stack's webhook
+  fork-sync                      Show what upstream has that this fork does not, and try the merge
   version                        Show the version of dev-kit
   help [<command>]               Show this help, or the help of a command
 

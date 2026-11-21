@@ -3,7 +3,7 @@
 Shared tooling for a family of small self-hosted projects: what every repository needs in the same way comes from here instead of being copied into each one.
 
 - **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once.
-- **The `dev-kit` command**, installed by the feature: releases from the changelog, and deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook.
+- **The `dev-kit` command**, installed by the feature: releases from the changelog, deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook, and a look at what upstream has for a fork.
 
 ## The devcontainer feature
 
@@ -111,6 +111,32 @@ The container needs no Dockhand token: the webhook can only redeploy that one st
 ```
 
 In Dockhand, turn on the webhook of the git stack and give it a long random secret. The webhook URL must be reachable from the devcontainer: Dockhand is usually behind a reverse proxy with single sign-on, so let exactly the path `/api/git/stacks/<id>/webhook` through without it, for POST only and only from your own network; the signature protects it. The webhook has no replay protection: whoever sees a signed request can send it again and redeploy `main`, so use https.
+
+### Forks
+
+A fork keeps the original repository as the remote `upstream` and takes its changes by merging. `dev-kit fork-sync` shows what there is to take, without changing anything but the refs of upstream (branches in `upstream/*`, tags in `refs/upstream-tags/*`, so they never mix with the fork's own):
+
+```text
+$ dev-kit fork-sync
+upstream:              https://github.com/example/myapp.git (main)
+upstream/main:         1a2b3c4 2026-11-20 Add search
+last merged release:   v2.3.0 (merge base 5d6e7f8 2026-10-02)
+own commits:           4
+new upstream commits:  12
+
+New upstream releases:
+  v2.4.0
+
+New upstream commits (without merges, newest first, at most 30):
+  ...
+
+Merging upstream/main into HEAD conflicts in:
+  src/config.ts
+To merge and resolve them: git merge upstream/main
+result: conflicts
+```
+
+The merge is tried in memory (`git merge-tree`, git 2.38 or newer). `--to v2.4.0` tries a release instead of the branch, `--branch` picks another upstream branch. What upstream wrote (commit subjects, tag names) is shown without control characters, and the upstream URL without credentials. The last line is `result: up-to-date`, `result: clean` or `result: conflicts`.
 
 ## License
 

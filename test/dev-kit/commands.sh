@@ -196,6 +196,69 @@ test_deploy_refuses_unreleased() {
     (cd "$dir" && ! dev-kit deploy --config "$dir.env" 2> "$dir.err") && grep -q 'is not on origin' "$dir.err"
 }
 
+# An upstream repository with a release v1.0.0 and a fork of it with a commit of its own
+new_fork() {
+    local upstream fork
+    upstream=$(new_repo)
+    printf 'line 1\nline 2\n' > "$upstream/app.txt"
+    commit_all "$upstream"
+    git -C "$upstream" tag v1.0.0
+    fork=$(mktemp -d)
+    git clone --quiet "$upstream" "$fork"
+    git -C "$fork" remote rename origin upstream
+    git -C "$fork" config user.name "Test"
+    git -C "$fork" config user.email "test@example.com"
+    git -C "$fork" config commit.gpgsign false
+    echo "fork" > "$fork/fork.txt"
+    commit_all "$fork"
+    printf '%s %s\n' "$upstream" "$fork"
+}
+
+test_fork_sync() {
+    local upstream fork out
+    read -r upstream fork <<< "$(new_fork)"
+    cd "$fork" || return 1
+    out=$(dev-kit fork-sync 2> /dev/null) || return 1
+    grep -q '^result: up-to-date$' <<< "$out" || return 1
+
+    # upstream releases v1.1.0 with a change the fork does not touch
+    echo "new" > "$upstream/new.txt"
+    commit_all "$upstream"
+    git -C "$upstream" tag v1.1.0
+    out=$(dev-kit fork-sync 2> /dev/null) || return 1
+    grep -q '^  v1.1.0$' <<< "$out" && grep -q '^result: clean$' <<< "$out" \
+        && grep -q 'last merged release: *v1.0.0' <<< "$out" || return 1
+
+    # both change the same line
+    sed -i 's/line 1/upstream/' "$upstream/app.txt"
+    commit_all "$upstream"
+    sed -i 's/line 1/fork/' app.txt
+    git commit --quiet -am "chore: fork change"
+    out=$(dev-kit fork-sync 2> /dev/null) || return 1
+    grep -q '^  app.txt$' <<< "$out" && grep -q '^result: conflicts$' <<< "$out" || return 1
+    # --to the release before the conflict merges cleanly
+    out=$(dev-kit fork-sync --to v1.1.0 2> /dev/null) || return 1
+    grep -q '^result: clean$' <<< "$out" || return 1
+    # upstream tags stay out of the fork's own tags
+    [[ -z "$(git tag --list v1.1.0)" ]] || return 1
+    # control characters from upstream never reach the terminal
+    git -C "$upstream" commit --quiet --allow-empty -m "$(printf 'evil \033]52;c;eA==\a subject')"
+    out=$(dev-kit fork-sync 2> /dev/null) || return 1
+    grep -q 'evil .*subject' <<< "$out" && ! grep -q $'\033' <<< "$out" || return 1
+    # nothing was merged
+    [[ -z "$(git status --porcelain)" ]] && ! git merge-base --is-ancestor refs/upstream-tags/v1.1.0 HEAD
+    local status=$?
+    cd - > /dev/null || return 1
+    return $status
+}
+
+test_fork_sync_needs_upstream() {
+    local dir
+    dir=$(new_repo)
+    commit_all "$dir"
+    (cd "$dir" && ! dev-kit fork-sync 2> /dev/null)
+}
+
 check "release: VERSION, changelog, commit and tag" test_release_version_file
 check "release: pyproject.toml without uv" test_release_pyproject
 check "release: version.go" test_release_version_go
@@ -205,3 +268,5 @@ check "release: --push pushes main and the tag" test_release_push
 check "deploy: HMAC-SHA256 like openssl" test_deploy_hmac
 check "deploy: the settings are data, not code" test_deploy_config
 check "deploy: refuses an unreleased origin/main" test_deploy_refuses_unreleased
+check "fork-sync: releases, commits, clean and conflicting merges" test_fork_sync
+check "fork-sync: needs a remote upstream" test_fork_sync_needs_upstream
