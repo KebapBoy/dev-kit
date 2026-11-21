@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# dev-kit: commands for the repositories of the project family.
+# Each command lives in $DEV_KIT_LIB/<command>.sh and defines a function cmd_<command>.
+set -euo pipefail
+
+# The command files: next to the installed command in ../lib/dev-kit, or in ../lib in the source
+# tree. Never from the environment, so a variable cannot make dev-kit run other code.
+bin_dir=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+if [[ -f "$bin_dir/../lib/dev-kit/common.sh" ]]; then
+    DEV_KIT_LIB="$bin_dir/../lib/dev-kit"
+else
+    DEV_KIT_LIB="$bin_dir/../lib"
+fi
+# shellcheck source-path=SCRIPTDIR/../lib
+source "$DEV_KIT_LIB/common.sh"
+
+usage() {
+    cat << 'EOF'
+Usage: dev-kit <command> [options]
+
+Commands:
+  version                        Show the version of dev-kit
+  help [<command>]               Show this help, or the help of a command
+
+Run "dev-kit help <command>" for the options of a command.
+EOF
+}
+
+main() {
+    local command="${1:-help}"
+    [[ $# -gt 0 ]] && shift
+    case "$command" in
+        help | -h | --help)
+            if [[ $# -gt 0 ]]; then
+                main "$1" --help
+            else
+                usage
+            fi
+            ;;
+        version | --version)
+            cat "$DEV_KIT_LIB/VERSION"
+            ;;
+        *)
+            # Command names are letters and dashes only, so they always name a file in the lib
+            if [[ ! "$command" =~ ^[a-z][a-z-]*$ || ! -f "$DEV_KIT_LIB/$command.sh" ]]; then
+                usage >&2
+                die "unknown command: $command"
+            fi
+            # shellcheck source=/dev/null
+            source "$DEV_KIT_LIB/$command.sh"
+            "cmd_${command//-/_}" "$@"
+            ;;
+    esac
+}
+
+main "$@"

@@ -1,0 +1,38 @@
+{
+    "id": "dev-kit",
+    "version": "0.0.0",
+    "name": "dev-kit",
+    "description": "Claude Code with one configuration shared by all devcontainers, git, ssh-keygen, just and the dev-kit command (release, deploy, fork-sync).",
+    "documentationURL": "https://github.com/KebapBoy/dev-kit",
+    "options": {
+        "claudeChannel": {
+            "type": "string",
+            "enum": ["stable", "latest"],
+            "default": "stable",
+            "description": "Release channel of Claude Code (native installer; it updates itself)"
+        },
+        "justVersion": {
+            "type": "string",
+            "proposals": ["1.59.0", "none"],
+            "default": "1.59.0",
+            "description": "Version of just, or none to leave it out"
+        }
+    },
+    "containerEnv": {
+        "CLAUDE_CONFIG_DIR": "/var/lib/dev-kit/claude",
+        "USE_BUILTIN_RIPGREP": "0"
+    },
+    "mounts": [
+        {
+            "source": "dev-kit-claude",
+            "target": "/var/lib/dev-kit/claude",
+            "type": "volume"
+        }
+    ],
+    "customizations": {
+        "vscode": {
+            "extensions": ["anthropic.claude-code"]
+        }
+    },
+    "installsAfter": ["ghcr.io/devcontainers/features/common-utils"]
+}
