@@ -17,4 +17,7 @@ check "dev-kit knows its version" bash -c "dev-kit version | grep -Eq '^[0-9]+\.
 check "CLAUDE_CONFIG_DIR is set" test "$CLAUDE_CONFIG_DIR" = /var/lib/dev-kit/claude
 check "the configuration directory is writable" bash -c "touch \"\$CLAUDE_CONFIG_DIR/.test\" && rm \"\$CLAUDE_CONFIG_DIR/.test\""
 
+# shellcheck source=test/dev-kit/commands.sh
+source "$(dirname "$0")/commands.sh"
+
 reportResults

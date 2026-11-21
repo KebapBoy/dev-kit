@@ -3,6 +3,7 @@
 Shared tooling for a family of small self-hosted projects: what every repository needs in the same way comes from here instead of being copied into each one.
 
 - **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once.
+- **The `dev-kit` command**, installed by the feature: releases from the changelog.
 
 ## The devcontainer feature
 
@@ -67,6 +68,27 @@ A feature cannot run anything on the host, so the repository copies your user-le
 ```
 
 Add `.devcontainer/host/` to `.gitignore`.
+
+## The dev-kit command
+
+`dev-kit help` lists the commands, `dev-kit help <command>` explains one.
+
+### Releases
+
+A repository keeps its changes under `## [Unreleased]` in `CHANGELOG.md` ([Keep a Changelog](https://keepachangelog.com/en/1.1.0/)) and its version in exactly one place: `VERSION`, `package.json` or `pyproject.toml` in the top directory, or else a `version.go` with `Version = "x.y.z"` (the only one in the repository).
+
+```sh
+dev-kit release 1.4.0 -m "Shared playlists and a faster search"
+dev-kit release --push
+```
+
+The first command works on `main` and pushes nothing. It checks that the working tree is clean, that 1.4.0 is greater than the current version, that there are entries under `[Unreleased]` and that `just check` passes (if the repository has that recipe; skip it with `--no-check`). Then it:
+
+1. turns `## [Unreleased]` into `## [1.4.0] - <today>` above the entries and updates the compare links at the bottom, if there are any,
+2. sets the version (through npm for `package.json`, so `package-lock.json` follows, and through uv for `pyproject.toml`, so `uv.lock` follows),
+3. commits `chore: release 1.4.0` with the summary as body and tags `v1.4.0`, both signed if git has a signing key.
+
+`dev-kit release --push` pushes `main` and the release tag on `HEAD` in one atomic push.
 
 ## License
 

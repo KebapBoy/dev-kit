@@ -18,8 +18,8 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 | `src/dev-kit/devcontainer-feature.json`       | The feature: options, `CLAUDE_CONFIG_DIR`, the volume `dev-kit-claude`, the VS Code extension |
 | `src/dev-kit/install.sh`                      | Installs packages, just, Claude Code, the configuration directory and `dev-kit` (POSIX sh: runs before bash exists on Alpine) |
 | `src/dev-kit/bin/dev-kit`                     | The `dev-kit` command: dispatches to `lib/<command>.sh` |
-| `src/dev-kit/lib/`                            | `common.sh` (helpers) and one file per command |
-| `test/dev-kit/`                               | Feature tests: `test.sh` and one script per scenario in `scenarios.json` (Debian, Alpine, without just) |
+| `src/dev-kit/lib/`                            | `common.sh` (helpers) and one file per command: `release.sh` |
+| `test/dev-kit/`                               | Feature tests: `test.sh` and one script per scenario in `scenarios.json` (Debian, Alpine, without just); `commands.sh` tests the commands in throwaway repositories, without network |
 | `VERSION`                                     | The version of dev-kit                      |
 | `justfile`                                    | Development commands (see below)            |
 | `.editorconfig`                               | Indentation, line endings and charset       |

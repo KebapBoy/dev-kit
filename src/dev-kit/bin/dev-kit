@@ -19,6 +19,8 @@ usage() {
 Usage: dev-kit <command> [options]
 
 Commands:
+  release <x.y.z> -m <summary>   Turn [Unreleased] into a release: changelog, version, commit, tag
+  release --push                 Push the release commit and its tag
   version                        Show the version of dev-kit
   help [<command>]               Show this help, or the help of a command
 
