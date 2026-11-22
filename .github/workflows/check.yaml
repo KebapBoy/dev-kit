@@ -1,11 +1,13 @@
 # Checks on every push and pull request: formatting and shellcheck (just check), and the feature
-# tests in every scenario of test/dev-kit/scenarios.json (with Sysbox for the option docker)
+# tests in every scenario of test/dev-kit/scenarios.json (with Sysbox for the option docker).
+# publish.yaml runs them too, on the release tag, before it publishes anything.
 name: check
 
 on:
     push:
         branches: [main]
     pull_request:
+    workflow_call:
 
 permissions:
     contents: read

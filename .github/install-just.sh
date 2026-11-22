@@ -1,6 +1,6 @@
 #!/bin/sh
 # Installs the same just release as the feature (version and checksum from src/dev-kit/install.sh)
-# to /usr/local/bin, for the GitHub workflows
+# to /usr/local/bin, for the GitHub workflows and for hosts that run dev-kit release or the checks
 set -eu
 
 cd "$(dirname "$0")/.."

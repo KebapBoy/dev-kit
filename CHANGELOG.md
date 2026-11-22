@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Publishing runs the checks on the release tag first, and after publishing creates a GitHub release with the changelog section of the version.
+
 ### Fixed
 
 - `dev-kit release` stops when the repository has a `justfile` but `just` is not installed, instead of releasing without running `just check`.

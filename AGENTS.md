@@ -28,7 +28,7 @@ dev-kit holds what a family of small self-hosted projects shares: things that mu
 | `examples/<stack>/`                           | Reference files for new repositories per stack (`node-sveltekit`, `python-uv`, `go`, `php`); `examples/README.md` explains them |
 | `config.example/`                             | Examples of what stays on the host: `claude-code/` (managed Claude Code settings and MCP servers, mounted at `/etc/claude-code`) and `deploy.env` (deploy settings of a repository) |
 | `.github/workflows/check.yaml`                | On every push and pull request: `just check` and the feature tests |
-| `.github/workflows/publish.yaml`              | On a tag `v<x.y.z>`: publishes the feature to `ghcr.io/<owner>/dev-kit/dev-kit` with the version from the tag |
+| `.github/workflows/publish.yaml`              | On a tag `v<x.y.z>`: the checks of `check.yaml`, then publishes the feature to `ghcr.io/<owner>/dev-kit/dev-kit` with the version from the tag and creates the GitHub release |
 | `.github/install-just.sh`                     | Installs the just release of the feature in the workflows |
 | `.github/install-sysbox.sh`                   | Installs Sysbox (pinned, checksum verified) for the feature tests in the workflows |
 | `VERSION`                                     | The version of dev-kit                      |
@@ -48,7 +48,7 @@ Development needs only Docker and just: the tools run in containers with fixed v
 
 ### Releasing
 
-dev-kit releases itself with its own command: `dev-kit release <x.y.z> -m <summary>` (version source `VERSION`), then `dev-kit release --push`. The tag starts `publish.yaml`, which waits for approval in the environment `release` (set a required reviewer in the repository settings, so a pushed tag alone publishes nothing), checks that tag and `VERSION` match, writes the version into `devcontainer-feature.json` (it stays `0.0.0` in git) and publishes the feature; repositories use it as `ghcr.io/kebapboy/dev-kit/dev-kit:<major>`. A new package on ghcr.io is private: after the first publish, make it public once in the package settings on GitHub.
+dev-kit releases itself with its own command: `dev-kit release <x.y.z> -m <summary>` (version source `VERSION`), then `dev-kit release --push`. The tag starts `publish.yaml`, which runs the checks of `check.yaml` on the tag, waits for approval in the environment `release` (set a required reviewer in the repository settings, so a pushed tag alone publishes nothing), checks that tag and `VERSION` match, writes the version into `devcontainer-feature.json` (it stays `0.0.0` in git), publishes the feature and creates a GitHub release with the changelog section of the version; repositories use it as `ghcr.io/kebapboy/dev-kit/dev-kit:<major>`. Published from this public repository, the package was public right away; should a new package be private, make it public once in its settings on GitHub. Push the commits first and release only once `check` is green on `main`.
 
 ## Conventions
 
