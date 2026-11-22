@@ -1,7 +1,7 @@
 # Publishes the feature to ghcr.io/<owner>/dev-kit/dev-kit when a release tag v<x.y.z> is pushed:
-# first the checks of check.yaml on the tag, then, once a reviewer of the environment "release"
-# approves it, the feature (every devcontainer runs it, so a pushed tag alone must not publish it),
-# and last a GitHub release with the changelog section of the version.
+# first the checks of check.yaml on the tag, then the feature, and last a GitHub release with the
+# changelog section of the version and a link to the package. Only the owner pushes tags, from the
+# host (devcontainers fetch with a read-only deploy key), so that push is the approval.
 # The version comes from the tag, which must match VERSION; it is written into
 # devcontainer-feature.json only here, so the file in git keeps 0.0.0.
 name: publish
@@ -20,7 +20,6 @@ jobs:
     publish:
         needs: check
         runs-on: ubuntu-24.04
-        environment: release
         permissions:
             contents: read
             packages: write
@@ -33,6 +32,7 @@ jobs:
                   version="${GITHUB_REF_NAME#v}"
                   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "not a release tag: $GITHUB_REF_NAME"; exit 1; }
                   [[ "$(cat VERSION)" == "$version" ]] || { echo "tag $GITHUB_REF_NAME does not match VERSION $(cat VERSION)"; exit 1; }
+                  grep -q "^## \[$version\] - " CHANGELOG.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
                   jq --arg v "$version" '.version = $v' src/dev-kit/devcontainer-feature.json > feature.json
                   mv feature.json src/dev-kit/devcontainer-feature.json
             - name: Publish the feature
@@ -67,4 +67,13 @@ jobs:
                       found { print }
                   ' CHANGELOG.md > notes.md
                   grep -q '[^[:space:]]' notes.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+                  owner="${GITHUB_REPOSITORY_OWNER,,}"
+                  repo="${GITHUB_REPOSITORY#*/}"
+                  repo="${repo,,}"
+                  {
+                      echo
+                      echo "### Package"
+                      echo
+                      echo "[\`ghcr.io/$owner/$repo/dev-kit:$version\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/pkgs/container/$repo%2Fdev-kit)"
+                  } >> notes.md
                   gh release create "$GITHUB_REF_NAME" --verify-tag --title "$version" --notes-file notes.md

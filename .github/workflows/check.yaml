@@ -1,13 +1,14 @@
-# Checks on every push and pull request: formatting and shellcheck (just check), and the feature
-# tests in every scenario of test/dev-kit/scenarios.json (with Sysbox for the option docker).
-# publish.yaml runs them too, on the release tag, before it publishes anything.
+# Checks on every pull request and on every release tag (publish.yaml calls this workflow before it
+# publishes anything): formatting and shellcheck (just check), and the feature tests in every
+# scenario of test/dev-kit/scenarios.json (with Sysbox for the option docker). Not on every push to
+# main: dev-kit release runs just check before it tags, and a release is what gets published.
+# Start it by hand in the Actions tab (workflow_dispatch) to test main before a release.
 name: check
 
 on:
-    push:
-        branches: [main]
     pull_request:
     workflow_call:
+    workflow_dispatch:
 
 permissions:
     contents: read

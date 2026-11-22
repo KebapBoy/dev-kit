@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Publishing no longer waits for approval in the GitHub environment `release`: pushing the release tag, which only the owner does from the host, is the approval. The checks still run on the tag first.
+- The checks no longer run on every push to `main`, only on pull requests, on release tags and when started by hand.
+- The GitHub release links to the published package.
+
 ## [1.0.1] - 2026-11-22
 
 ### Changed
