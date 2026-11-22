@@ -75,7 +75,8 @@ cmd_release() {
 
     if [[ "$check" == true ]]; then
         local recipes=""
-        if [[ -f justfile ]] && command -v just > /dev/null; then
+        if [[ -f justfile ]]; then
+            command -v just > /dev/null || die "the repository has a justfile, but just is not installed; install it or release with --no-check"
             recipes=$(just --summary 2> /dev/null || true)
         fi
         if [[ " $recipes " == *" check "* ]]; then

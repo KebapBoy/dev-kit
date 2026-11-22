@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `dev-kit release` stops when the repository has a `justfile` but `just` is not installed, instead of releasing without running `just check`.
+
 ## [1.0.0] - 2026-11-22
 
 ### Added

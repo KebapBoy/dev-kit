@@ -89,7 +89,7 @@ test_release_top_level_wins() {
 
 # Each of these must fail and leave the repository as it was
 test_release_refuses() {
-    local dir head
+    local dir head nojust out
     dir=$(new_repo)
     echo 0.1.0 > "$dir/VERSION"
     commit_all "$dir"
@@ -104,6 +104,15 @@ test_release_refuses() {
     git checkout --quiet -b feature
     ! dev-kit release 0.2.0 -m "Not on main" --no-check || return 1
     git checkout --quiet main
+    # A justfile, but no just in PATH: stop instead of releasing unchecked
+    printf 'check:\n    true\n' > justfile
+    git add justfile
+    git commit --quiet -m "chore: add justfile"
+    head=$(git rev-parse HEAD)
+    nojust=$(mktemp -d)
+    ln -s "$(command -v dev-kit)" "$nojust/dev-kit"
+    out=$(PATH="$nojust:/usr/bin:/bin" dev-kit release 0.2.0 -m "No just" 2>&1) && return 1
+    [[ "$out" == *"just is not installed"* ]] || return 1
     sed -i '/^- Something new$/d' CHANGELOG.md
     git commit --quiet -am "chore: empty unreleased"
     head=$(git rev-parse HEAD)
