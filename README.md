@@ -186,14 +186,14 @@ The first command works on `main` and pushes nothing. It checks that the working
 `dev-kit deploy` deploys a released `main` to the repository's Dockhand git stack, which follows `main` with auto-update off, so only this command (or someone in Dockhand) deploys:
 
 1. It fetches `origin` and refuses unless `origin/main` carries a release tag `v<x.y.z>` that is on `origin` too. Forks, which deploy `main` without releases, use `dev-kit deploy --fork`. This check is a guardrail of the command, not of Dockhand: the webhook deploys whatever `main` is when Dockhand pulls it.
-2. It calls the stack's webhook: a POST signed with HMAC-SHA256 in `X-Hub-Signature-256`, like a GitHub webhook. The secret never leaves the container, and neither the secret nor the signature appears in a command line. Dockhand pulls `main`, builds and starts the stack, and answers when it is done.
+2. It calls the stack's webhook: a POST signed with HMAC-SHA256 in `X-Hub-Signature-256`, like a GitHub webhook. The secret never leaves the container, and neither the secret nor the signature appears in a command line. Dockhand pulls `main`, builds and starts the stack, and answers when it is done. curl waits for that answer up to `DEPLOY_TIMEOUT`. A proxy in front of Dockhand may give up sooner (Cloudflare answers 524 after 100 seconds, other proxies 504): Dockhand keeps deploying, so `deploy` goes on to the next step for a release, and fails asking you to check the stack in Dockhand when it cannot tell (no `DEPLOY_HEALTH_URL`, or `--fork`). Any other answer than 2xx fails.
 3. It waits until the app's health URL answers with the new version in its body (for `--fork`: until it answers at all).
 
 The container needs no Dockhand token: the webhook can only redeploy that one stack.
 
 **Settings** live on the host, outside of git, in the folder `etc/` of the repository's host folder: `~/.config/dev-kit/<repository>/etc/deploy.env` (see [config.example/deploy.env](config.example/deploy.env) and [Files from the host](#files-from-the-host)). It is read as `KEY=VALUE` data, nothing in it runs. The devcontainer mounts only that folder, read-only, at `/etc/dev-kit`, so a container sees only the settings of its own repository.
 
-In Dockhand, turn on the webhook of the git stack and give it a long random secret. The webhook URL must be reachable from the devcontainer: Dockhand is usually behind a reverse proxy with single sign-on, so let exactly the path `/api/git/stacks/<id>/webhook` through without it, for POST only and only from your own network; the signature protects it. The webhook has no replay protection: whoever sees a signed request can send it again and redeploy `main`, so use https.
+In Dockhand, turn on the webhook of the git stack and give it a long random secret. The webhook URL must be reachable from the devcontainer: Dockhand is usually behind a reverse proxy with single sign-on, so let exactly the path `/api/git/stacks/<id>/webhook` through without it, for POST only and only from your own network; the signature protects it. Best call it on Dockhand's address in your network, not through a tunnel or CDN such as Cloudflare, whose timeout ends long deploys early. The webhook has no replay protection: whoever sees a signed request can send it again and redeploy `main`, so use https.
 
 ### Forks
 

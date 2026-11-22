@@ -13,14 +13,18 @@ Deploys what is on origin/main:
      any commit, for forks, which deploy main without releases). This is a guardrail of the
      command; the webhook itself deploys whatever main is.
   2. calls the webhook of the git stack (POST, signed with HMAC-SHA256 like a GitHub webhook);
-     the stack pulls main, builds and starts
+     the stack pulls main, builds and starts, and answers when it is done. If a proxy in front
+     of Dockhand gives up waiting first (504 or 524, e.g. Cloudflare after 100 seconds),
+     Dockhand keeps deploying: a release then counts as deployed once the health URL reports
+     its version; without DEPLOY_HEALTH_URL, and for --fork, check the deploy in Dockhand.
   3. waits until the health URL answers and, for a release, reports its version
 
 Settings come from /etc/dev-kit/deploy.env (or --config, or $DEV_KIT_CONFIG), KEY=VALUE lines:
   DEPLOY_WEBHOOK_URL     webhook of the stack, e.g. https://dockhand.example.com/api/git/stacks/1/webhook
   DEPLOY_WEBHOOK_SECRET  its secret
   DEPLOY_HEALTH_URL      optional: e.g. https://myapp.example.com/healthz
-  DEPLOY_TIMEOUT         optional: seconds for the deploy and for the health check (default 600)
+  DEPLOY_TIMEOUT         optional: seconds for the deploy and for the health check (default 600);
+                         at least 100 behind Cloudflare, so the proxy gives up before dev-kit does
 EOF
 }
 
@@ -64,7 +68,7 @@ cmd_deploy() {
         info "deploying $version (origin/main at ${commit:0:7})"
     fi
 
-    deploy_call_webhook "$commit"
+    deploy_call_webhook "$commit" "$version"
     if [[ -n "$DEPLOY_HEALTH_URL" ]]; then
         deploy_wait_healthy "$version"
     else
@@ -152,11 +156,13 @@ deploy_hmac_sha256() {
     } | openssl dgst -sha256 -r | cut -c1-64
 }
 
-# Calls the webhook for commit $1 and fails unless the stack reports success. The signature header
-# goes to curl through a file descriptor, not its command line: anyone who sees the signature can
-# replay the request (the webhook has no replay protection).
+# Calls the webhook for commit $1 (release $2, empty for --fork) and fails unless the stack reports
+# success, or a proxy gave up waiting and the health check can still tell: then it sets
+# DEPLOY_PROXY_TIMEOUT. The signature header goes to curl through a file descriptor, not its
+# command line: anyone who sees the signature can replay the request (the webhook has no replay
+# protection). curl waits up to DEPLOY_TIMEOUT for the answer, as long as the deploy may take.
 deploy_call_webhook() {
-    local commit=$1 body signature response status
+    local commit=$1 version=$2 body signature response status
     body=$(printf '{"ref":"refs/heads/main","after":"%s","sender":"dev-kit"}' "$commit")
     signature=$(printf '%s' "$body" | deploy_hmac_sha256 "$DEPLOY_WEBHOOK_SECRET")
     info "calling the webhook (Dockhand pulls, builds and starts the stack; this can take minutes)"
@@ -168,6 +174,10 @@ deploy_call_webhook() {
         "$DEPLOY_WEBHOOK_URL") || die "webhook call failed"
     status=${response##*$'\n'}
     response=${response%$'\n'*}
+    if [[ "$status" == 504 || "$status" == 524 ]]; then
+        deploy_proxy_timeout "$status" "$version"
+        return 0
+    fi
     [[ "$status" == 2* ]] || die "webhook answered $status: ${response:0:500}"
     if [[ "$response" =~ \"success\"[[:space:]]*:[[:space:]]*false ]]; then
         die "the deploy failed: ${response:0:500}"
@@ -177,6 +187,21 @@ deploy_call_webhook() {
     else
         info "the stack deployed"
     fi
+}
+
+# The webhook answered $1, a proxy's timeout (504, or Cloudflare's 524 after 100 seconds): the proxy
+# gave up, but Dockhand most likely keeps deploying. Only the health URL reporting release $2 can
+# tell whether it succeeds; without one there is nothing to wait for.
+deploy_proxy_timeout() {
+    local status=$1 version=$2 cause
+    info "the webhook answered $status: a proxy in front of Dockhand gave up waiting, but Dockhand most likely keeps deploying"
+    if [[ -z "$DEPLOY_HEALTH_URL" ]]; then
+        cause="without DEPLOY_HEALTH_URL"
+    elif [[ -z "$version" ]]; then
+        cause="--fork deploys no version that the health URL could report, so"
+    fi
+    [[ -z "${cause:-}" ]] || die "$cause dev-kit cannot tell whether the deploy succeeds: check the stack in Dockhand"
+    DEPLOY_PROXY_TIMEOUT=true
 }
 
 # Waits until the health URL answers, for a release with a body that contains version $1
@@ -199,5 +224,7 @@ deploy_wait_healthy() {
         fi
         sleep 5
     done
+    [[ "${DEPLOY_PROXY_TIMEOUT:-}" != true ]] \
+        || die "not healthy with version $version after ${DEPLOY_TIMEOUT}s: check the deploy in Dockhand; last answer: ${body:0:200}"
     die "not healthy${version:+ with version $version} after ${DEPLOY_TIMEOUT}s; last answer: ${body:0:200}"
 }

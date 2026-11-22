@@ -205,6 +205,42 @@ test_deploy_refuses_unreleased() {
     (cd "$dir" && ! dev-kit deploy --config "$dir.env" 2> "$dir.err") && grep -q 'is not on origin' "$dir.err"
 }
 
+# A proxy's timeout (504, 524) is no failure if the health URL can tell: deploy then waits for the
+# version; without a health URL or a version it fails and points to Dockhand. Other errors fail.
+# curl is a stub: the webhook answers $WEBHOOK_STATUS, the health URL reports 1.2.0.
+deploy_webhook() {
+    # shellcheck disable=SC2016 # expanded by lib_run
+    lib_run deploy '
+        curl() {
+            if [[ "${*: -1}" == "$DEPLOY_WEBHOOK_URL" ]]; then
+                printf "error code: %s\n%s" "$WEBHOOK_STATUS" "$WEBHOOK_STATUS"
+            else
+                printf "{\"version\":\"1.2.0\"}"
+            fi
+        }
+        sleep() { :; }
+        DEPLOY_WEBHOOK_URL=https://dockhand.example.com/webhook DEPLOY_WEBHOOK_SECRET=x
+        DEPLOY_HEALTH_URL=$1 DEPLOY_TIMEOUT=2
+        deploy_call_webhook 0123456 "$2"
+        [[ -z "$DEPLOY_HEALTH_URL" ]] || deploy_wait_healthy "$2"' "$@"
+}
+
+test_deploy_proxy_timeout() {
+    local err
+    err=$(mktemp)
+    WEBHOOK_STATUS=524 deploy_webhook https://myapp.example.com/healthz 1.2.0 2> "$err" \
+        && grep -q 'Dockhand most likely keeps deploying' "$err" && grep -q 'healthy, version 1.2.0' "$err" \
+        && WEBHOOK_STATUS=504 deploy_webhook https://myapp.example.com/healthz 1.2.0 2> /dev/null || return 1
+    # The deploy never reports the version: fails after DEPLOY_TIMEOUT and points to Dockhand
+    ! WEBHOOK_STATUS=524 deploy_webhook https://myapp.example.com/healthz 1.3.0 2> "$err" \
+        && grep -q 'check the deploy in Dockhand' "$err" || return 1
+    ! WEBHOOK_STATUS=524 deploy_webhook "" 1.2.0 2> "$err" && grep -q 'check the stack in Dockhand' "$err" || return 1
+    ! WEBHOOK_STATUS=524 deploy_webhook https://myapp.example.com/healthz "" 2> "$err" \
+        && grep -q 'check the stack in Dockhand' "$err" || return 1
+    ! WEBHOOK_STATUS=502 deploy_webhook https://myapp.example.com/healthz 1.2.0 2> "$err" \
+        && grep -q 'webhook answered 502' "$err"
+}
+
 # An upstream repository with a release v1.0.0 and a fork of it with a commit of its own
 new_fork() {
     local upstream fork
@@ -336,6 +372,7 @@ check "release: --push pushes main and the tag" test_release_push
 check "deploy: HMAC-SHA256 like openssl" test_deploy_hmac
 check "deploy: the settings are data, not code" test_deploy_config
 check "deploy: refuses an unreleased origin/main" test_deploy_refuses_unreleased
+check "deploy: a proxy timeout waits for the version or points to Dockhand" test_deploy_proxy_timeout
 check "fork-sync: releases, commits, clean and conflicting merges" test_fork_sync
 check "fork-sync: needs a remote upstream" test_fork_sync_needs_upstream
 check "job: wait returns while running and with the exit code when done" test_job_wait

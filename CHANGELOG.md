@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The checks no longer run on every push to `main`, only on pull requests, on release tags and when started by hand.
 - The GitHub release links to the published package.
 
+### Fixed
+
+- `dev-kit deploy` no longer fails when a proxy in front of Dockhand gives up waiting for the webhook (504, or 524 from Cloudflare after 100 seconds) while Dockhand keeps deploying: it says so and waits until `DEPLOY_HEALTH_URL` reports the release. Without a health URL, and for `--fork`, it cannot tell whether the deploy succeeds and fails asking you to check the stack in Dockhand.
+
 ## [1.0.1] - 2026-11-22
 
 ### Changed
