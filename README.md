@@ -3,7 +3,7 @@
 Shared tooling for a family of small self-hosted projects: what every repository needs in the same way comes from here instead of being copied into each one.
 
 - **A devcontainer feature** that brings Claude Code, git, ssh-keygen and [just](https://just.systems) into any devcontainer, with one Claude Code configuration shared by all of them: sign in once, set up MCP servers once, with MCP servers and policies kept on the host. Optionally Docker inside, for containers run with [Sysbox](https://github.com/nestybox/sysbox).
-- **The `dev-kit` command**, installed by the feature: releases from the changelog, deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook, and a look at what upstream has for a fork.
+- **The `dev-kit` command**, installed by the feature: releases from the changelog, deploys of a release to a [Dockhand](https://github.com/Finsys/dockhand) git stack through its webhook, a look at what upstream has for a fork, and long commands in the background for AI agents that wait for them in short steps.
 - **[Examples](examples/README.md)** for new repositories in Node/SvelteKit, Python/uv, Go and PHP: Dockerfile, compose files for a demo and for a Dockhand installation, devcontainer, `justfile`, editor and linter settings, all wired up with the feature and the `dev-kit` command.
 
 ## The devcontainer feature
@@ -44,7 +44,7 @@ The volume is separate from `~/.claude` on the host on purpose: tokens that Clau
 Claude Code also reads managed settings from `/etc/claude-code/`: they win over the settings in the volume and in a repository, and nothing in Claude Code can change them. Keep them on the host, outside of git, in `~/.config/dev-kit/claude-code/`; every devcontainer mounts that directory read-only at `/etc/claude-code` (see below). Examples: [config.example/claude-code/](config.example/claude-code/).
 
 - `managed-mcp.json`: the MCP servers of every devcontainer. While it exists, Claude Code uses only these: no server can be added in the volume or by a repository. Sign in to a server with OAuth once, with `/mcp` in any devcontainer; the token stays in the volume.
-- `managed-settings.json`: policies, e.g. `allowManagedHooksOnly` (hooks from the volume or a repository do not run) and `disableClaudeAiConnectors` (the connectors of your claude.ai account stay out of devcontainers).
+- `managed-settings.json`: policies, e.g. `allowManagedHooksOnly` (hooks from the volume or a repository do not run) and `disableClaudeAiConnectors` (the connectors of your claude.ai account stay out of devcontainers). Settings that should be the same in every devcontainer belong here too, such as how long the prompt cache lives (`promptCacheTtl`, `subagentPromptCacheTtl`, see [Long commands and the prompt cache](#long-commands-and-the-prompt-cache)): the settings of Claude Code on the host do not reach the volume.
 
 Which servers you use and where they are stays on your host.
 
@@ -220,6 +220,39 @@ result: conflicts
 ```
 
 The merge is tried in memory (`git merge-tree`, git 2.38 or newer). `--to v2.4.0` tries a release instead of the branch, `--branch` picks another upstream branch. What upstream wrote (commit subjects, tag names) is shown without control characters, and the upstream URL without credentials. The last line is `result: up-to-date`, `result: clean` or `result: conflicts`.
+
+### Long commands and the prompt cache
+
+Claude Code caches the conversation for a few minutes (5 by default, optionally an hour at a higher price per written token). A build or test suite that runs longer than that, as one tool call in the foreground, lets the cache expire: the next request writes the whole conversation again. `dev-kit job` runs such a command in the background instead and lets the agent wait for it in steps that are shorter than the cache's lifetime:
+
+```text
+$ dev-kit job start check 'just check'
+started check, log: /tmp/dev-kit-jobs-1000/check.log
+$ dev-kit job wait check
+RUNNING check 240s 1834 lines
+ok   tests/test_api.py::test_search
+$ dev-kit job wait check
+DONE check exit=0 391s
+...the last 20 lines of the log
+```
+
+`wait` returns as soon as the command is done, and otherwise after `--max` seconds (default 240); each return is a tool call that keeps the cache warm. While the command runs it prints only two lines of the log, so the waiting adds little to the conversation; once it is done, the last 20 lines (`--lines`), and it exits with the command's exit code. Done means the exit code was written: a command that prints "DONE" itself cannot fool it. Running means a process of the job still holds its lock (`flock`), so a stale pid file after a crash or a container restart never makes an unrelated process count as the job. What `wait` shows from the log comes without control characters. `dev-kit job stop` ends the command with everything it started (TERM, after 10 seconds KILL), `dev-kit job list` shows all jobs and their logs.
+
+Every wait reads the cached conversation once (a tenth of the normal price) and replaces a new write of all of it when the cache would have expired. That pays off for commands up to about 40 minutes; for longer ones, let the cache expire once.
+
+Tell the agent in your `CLAUDE.md`, which every devcontainer gets from the host. The main agent and general-purpose subagents follow it; Claude Code's Explore subagents do not get `CLAUDE.md` and wait in the foreground. For example:
+
+```markdown
+## Long-running commands
+- Commands that may run longer than 2 minutes (builds, test suites, installs, image pulls):
+  `dev-kit job start <name> '<command>'`, then `dev-kit job wait <name>` with a Bash timeout of
+  270000 ms, again and again right after each RUNNING, without other tool calls in between.
+- On DONE, look at the log (`grep`, `tail`) instead of printing all of it.
+- Commands that will run longer than 40 minutes: run them in the background and wait for the
+  notification instead.
+```
+
+On the host, `src/dev-kit/bin/dev-kit` runs from a clone of this repository (`ln -s ~/git-repos/dev-kit/src/dev-kit/bin/dev-kit ~/.local/bin/dev-kit`, or any directory in `PATH`).
 
 ## License
 

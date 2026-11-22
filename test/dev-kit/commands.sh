@@ -259,6 +259,65 @@ test_fork_sync_needs_upstream() {
     (cd "$dir" && ! dev-kit fork-sync 2> /dev/null)
 }
 
+test_job_wait() {
+    local name="test-$$-wait" out
+    dev-kit job start "$name" 'echo first; sleep 3; echo last; exit 3' > /dev/null || return 1
+    # wait returns after --max while the job runs, with exit code 0
+    out=$(dev-kit job wait "$name" --max 1) || return 1
+    grep -q "^RUNNING $name " <<< "$out" && grep -q '^first$' <<< "$out" || return 1
+    # and with the job's exit code once it is done
+    out=$(dev-kit job wait "$name" --max 30)
+    [[ $? -eq 3 ]] && grep -q "^DONE $name exit=3 " <<< "$out" && grep -q '^last$' <<< "$out"
+}
+
+test_job_stop() {
+    local name="test-$$-stop" log pid out
+    log=$(dev-kit job start "$name" 'sleep 300 & sleep 300') || return 1
+    # a second job of the same name is refused while the first runs
+    dev-kit job start "$name" true > /dev/null 2>&1 && return 1
+    # start prints "started <name>, log: <dir>/<name>.log"; the pid is in <dir>/<name>.pid
+    log=${log##*log: }
+    pid=$(cat "${log%.log}.pid") || return 1
+    dev-kit job stop "$name" > /dev/null || return 1
+    sleep 1
+    # nothing of the job's process group is left
+    ! kill -0 -- "-$pid" 2> /dev/null || return 1
+    out=$(dev-kit job wait "$name" --max 5) && return 1
+    grep -q "^DONE $name exit=stopped " <<< "$out"
+}
+
+test_job_stale_pid() {
+    local name="test-$$-stale" log pid other out
+    log=$(dev-kit job start "$name" 'sleep 300') || return 1
+    log=${log##*log: }
+    pid=$(cat "${log%.log}.pid") || return 1
+    # the job dies without an exit code, and its pid file now names an unrelated process group
+    kill -KILL -- "-$pid"
+    # shellcheck disable=SC2016 # expanded by the inner shell
+    setsid sh -c 'echo $$ > "$1"; exec sleep 300' sh "${log%.log}.pid" < /dev/null > /dev/null 2>&1 &
+    sleep 0.5
+    other=$(cat "${log%.log}.pid") || return 1
+    out=$(dev-kit job wait "$name" --max 5) && return 1
+    grep -q "^DONE $name exit=gone " <<< "$out" || return 1
+    dev-kit job stop "$name" > /dev/null 2>&1
+    # the unrelated process survives
+    kill -0 "$other" 2> /dev/null || return 1
+    kill "$other"
+}
+
+test_job_control_characters() {
+    local name="test-$$-ctl" out
+    dev-kit job start "$name" "printf 'a\\033]0;title\\007b\\n'" > /dev/null || return 1
+    out=$(dev-kit job wait "$name" --max 10) || return 1
+    grep -q '^a\]0;titleb$' <<< "$out" && ! grep -q $'\033' <<< "$out"
+}
+
+test_job_refuses() {
+    ! dev-kit job start 'Bad/name' true 2> /dev/null \
+        && ! dev-kit job wait "test-$$-missing" 2> /dev/null \
+        && ! dev-kit job wait "test-$$-missing" --max x 2> /dev/null
+}
+
 check "release: VERSION, changelog, commit and tag" test_release_version_file
 check "release: pyproject.toml without uv" test_release_pyproject
 check "release: version.go" test_release_version_go
@@ -270,3 +329,8 @@ check "deploy: the settings are data, not code" test_deploy_config
 check "deploy: refuses an unreleased origin/main" test_deploy_refuses_unreleased
 check "fork-sync: releases, commits, clean and conflicting merges" test_fork_sync
 check "fork-sync: needs a remote upstream" test_fork_sync_needs_upstream
+check "job: wait returns while running and with the exit code when done" test_job_wait
+check "job: stop ends the whole process group" test_job_stop
+check "job: refuses bad names and unknown jobs" test_job_refuses
+check "job: a stale pid file never stops an unrelated process" test_job_stale_pid
+check "job: no control characters from the log reach the terminal" test_job_control_characters
