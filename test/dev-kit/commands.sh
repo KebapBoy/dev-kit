@@ -87,6 +87,18 @@ test_release_top_level_wins() {
     [[ "$(cat "$dir/VERSION")" == 0.2.0 ]] && grep -q '"0.1.0"' "$dir/examples/go/version.go"
 }
 
+# A package.json or pyproject.toml with only development tools (no version) is no second source
+test_release_tools_manifest_no_source() {
+    local dir
+    dir=$(new_repo)
+    echo 0.1.0 > "$dir/VERSION"
+    printf '{\n    "name": "myapp",\n    "private": true,\n    "devDependencies": {\n        "prettier": "3.0.0"\n    }\n}\n' > "$dir/package.json"
+    printf '[project]\nname = "tools"\n\n[tool.other]\nversion = "9.9.9"\n' > "$dir/pyproject.toml"
+    commit_all "$dir"
+    (cd "$dir" && dev-kit release 0.2.0 -m "Something new" --no-check) || return 1
+    [[ "$(cat "$dir/VERSION")" == 0.2.0 ]] && ! grep -q '0.2.0' "$dir/package.json" "$dir/pyproject.toml"
+}
+
 # Each of these must fail and leave the repository as it was
 test_release_refuses() {
     local dir head nojust out
@@ -117,7 +129,7 @@ test_release_refuses() {
     git commit --quiet -am "chore: empty unreleased"
     head=$(git rev-parse HEAD)
     ! dev-kit release 0.2.0 -m "Nothing to release" --no-check || return 1
-    echo 1.0.0 > package.json
+    printf '{ "name": "myapp", "version": "1.0.0" }\n' > package.json
     git add package.json
     git commit --quiet -m "chore: second source"
     head=$(git rev-parse HEAD)
@@ -367,6 +379,7 @@ check "release: VERSION, changelog, commit and tag" test_release_version_file
 check "release: pyproject.toml without uv" test_release_pyproject
 check "release: version.go" test_release_version_go
 check "release: a top-level source wins over version.go" test_release_top_level_wins
+check "release: a package.json or pyproject.toml without a version is no source" test_release_tools_manifest_no_source
 check "release: refuses what it must not release" test_release_refuses
 check "release: --push pushes main and the tag" test_release_push
 check "deploy: HMAC-SHA256 like openssl" test_deploy_hmac

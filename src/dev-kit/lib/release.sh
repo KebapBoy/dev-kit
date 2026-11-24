@@ -14,7 +14,7 @@ Prepares a release on main, without pushing:
      bottom, if there are any)
   3. sets the version in the repository's version source: VERSION, package.json (through npm) or
      pyproject.toml (through uv if it is there) in the top directory, or else the one version.go
-     with Version = "x.y.z"
+     with Version = "x.y.z"; a package.json or pyproject.toml without a version does not count
   4. commits "chore: release x.y.z" with the summary as body and tags v<x.y.z> (both signed if git
      has a signing key)
 
@@ -114,12 +114,14 @@ release_push() {
 }
 
 # Prints the version source of the repository: VERSION, package.json or pyproject.toml in the top
-# directory, or else the one version.go anywhere in it; fails if there is none or more than one
+# directory, or else the one version.go anywhere in it; fails if there is none or more than one.
+# A package.json or pyproject.toml without a version (e.g. one that only holds development tools
+# of a PHP or Go app) is not a version source.
 release_version_source() {
     local sources=() file
     [[ -f VERSION ]] && sources+=(VERSION)
-    [[ -f package.json ]] && sources+=(package.json)
-    [[ -f pyproject.toml ]] && sources+=(pyproject.toml)
+    [[ -f package.json ]] && release_package_json_has_version && sources+=(package.json)
+    [[ -f pyproject.toml ]] && release_pyproject_has_version && sources+=(pyproject.toml)
     if [[ ${#sources[@]} -eq 0 ]]; then
         while IFS= read -r file; do
             sources+=("$file")
@@ -128,6 +130,21 @@ release_version_source() {
     [[ ${#sources[@]} -gt 0 ]] || die "no version source (VERSION, package.json, pyproject.toml or version.go)"
     [[ ${#sources[@]} -eq 1 ]] || die "more than one version source: ${sources[*]}"
     printf '%s\n' "${sources[0]}"
+}
+
+# True if package.json has a top-level "version"; without node, any "version" key counts, so a
+# real version source is never missed (reading it needs node anyway)
+release_package_json_has_version() {
+    if command -v node > /dev/null; then
+        node -e 'process.exit(typeof require("./package.json").version === "string" ? 0 : 1)' 2> /dev/null
+    else
+        grep -q '"version"[[:space:]]*:' package.json
+    fi
+}
+
+# True if the [project] table of pyproject.toml has a version, or declares it dynamic
+release_pyproject_has_version() {
+    awk '/^\[/ { p = ($0 == "[project]") } p && (/^version *=/ || /^dynamic *=.*"version"/) { found = 1 } END { exit !found }' pyproject.toml
 }
 
 release_read_version() {

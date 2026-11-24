@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Node/SvelteKit example answers `/healthz` with `Response.json` instead of the `json` helper of SvelteKit, which is deprecated in SvelteKit 3.
 - `dev-kit deploy` no longer fails when a proxy in front of Dockhand gives up waiting for the webhook (504, or 524 from Cloudflare after 100 seconds) while Dockhand keeps deploying: it says so and waits until `DEPLOY_HEALTH_URL` reports the release. Without a health URL, and for `--fork`, it cannot tell whether the deploy succeeds and fails asking you to check the stack in Dockhand.
+- `dev-kit release` no longer counts a `package.json` or `pyproject.toml` without a version as a version source, so a PHP or Go app whose `package.json` only holds development tools (Prettier, ESLint) next to `VERSION` can be released instead of failing with "more than one version source".
 
 ## [1.0.1] - 2026-11-22
 
