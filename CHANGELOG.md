@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `DEPLOY_RESOLVE` in `deploy.env` (`host:port:address`, several separated by commas): `dev-kit deploy` sends the webhook and health calls to that address like `curl --resolve`, keeping URL and certificate check. It avoids a CDN such as Cloudflare, which gives up after 100 seconds, when Dockhand is also reachable directly in your network.
 - `dev-kit-host diff`, `show` and the warning of `prepare` work for forks, whose upstream keeps the `Dockerfile` in the root: a fork keeps its own as `.devcontainer/Dockerfile`, or both files in `.devcontainer/fork/` when upstream has a devcontainer of its own. `prepare` records which of the three layouts a repository has in the file `layout` of the host folder and refuses to go on when the repository changes it (delete `layout` after reading what changed), so code in the container cannot hide a change from `diff`. Repositories of your own are unaffected.
 
 ### Changed

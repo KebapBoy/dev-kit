@@ -25,6 +25,10 @@ Settings come from /etc/dev-kit/deploy.env (or --config, or $DEV_KIT_CONFIG), KE
   DEPLOY_HEALTH_URL      optional: e.g. https://myapp.example.com/healthz
   DEPLOY_TIMEOUT         optional: seconds for the deploy and for the health check (default 600);
                          at least 100 behind Cloudflare, so the proxy gives up before dev-kit does
+  DEPLOY_RESOLVE         optional: host:port:address, several separated by commas. Both calls (webhook
+                         and health URL) then go to that address, the way curl --resolve does, while
+                         the URL and its certificate stay as they are: it takes the way through your
+                         network when the name resolves to a CDN, e.g. dockhand.example.com:443:192.0.2.10
 EOF
 }
 
@@ -89,12 +93,14 @@ deploy_require_remote_tag() {
 # Reads the settings from KEY=VALUE lines (no shell: nothing in the file runs). Errors name the line
 # number, never its content, which may hold the secret.
 deploy_load_config() {
-    local file=$1 line key value number=0
+    local file=$1 line key value number=0 entry entries
     [[ -f "$file" ]] || die "no settings in $file (see: dev-kit help deploy)"
     DEPLOY_WEBHOOK_URL=""
     DEPLOY_WEBHOOK_SECRET=""
     DEPLOY_HEALTH_URL=""
     DEPLOY_TIMEOUT=600
+    DEPLOY_RESOLVE=""
+    DEPLOY_RESOLVE_ARGS=()
     while IFS= read -r line || [[ -n "$line" ]]; do
         number=$((number + 1))
         line=${line%$'\r'}
@@ -108,7 +114,7 @@ deploy_load_config() {
             value=${BASH_REMATCH[1]}
         fi
         case "$key" in
-            DEPLOY_WEBHOOK_URL | DEPLOY_WEBHOOK_SECRET | DEPLOY_HEALTH_URL | DEPLOY_TIMEOUT)
+            DEPLOY_WEBHOOK_URL | DEPLOY_WEBHOOK_SECRET | DEPLOY_HEALTH_URL | DEPLOY_TIMEOUT | DEPLOY_RESOLVE)
                 printf -v "$key" '%s' "$value"
                 ;;
             *) info "$file, line $number: ignoring unknown setting $key" ;;
@@ -120,12 +126,64 @@ deploy_load_config() {
     [[ -z "$DEPLOY_HEALTH_URL" || "$DEPLOY_HEALTH_URL" =~ ^https?:// ]] \
         || die "$file: DEPLOY_HEALTH_URL is not an http(s) URL"
     [[ "$DEPLOY_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || die "$file: DEPLOY_TIMEOUT is not a number of seconds"
+    if [[ -n "$DEPLOY_RESOLVE" ]]; then
+        IFS=',' read -ra entries <<< "$DEPLOY_RESOLVE"
+        for entry in "${entries[@]}"; do
+            # Only the ends are trimmed: a space inside would silently turn into another address
+            entry=${entry#"${entry%%[![:space:]]*}"}
+            entry=${entry%"${entry##*[![:space:]]}"}
+            deploy_resolve_entry_ok "$entry" \
+                || die "$file: DEPLOY_RESOLVE entries look like host:port:address, separated by commas"
+            DEPLOY_RESOLVE_ARGS+=(--resolve "$entry")
+        done
+        deploy_resolve_covers "$DEPLOY_WEBHOOK_URL" \
+            || info "warning: no DEPLOY_RESOLVE entry matches the host and port of the webhook URL; curl ignores them for that call"
+        if [[ "$DEPLOY_WEBHOOK_URL" == http://* || "$DEPLOY_HEALTH_URL" == http://* ]]; then
+            info "warning: with DEPLOY_RESOLVE the plain http request goes to that address without a certificate check"
+        fi
+    fi
     if [[ "$DEPLOY_WEBHOOK_URL" == http://* ]]; then
         info "warning: the webhook URL is plain http; the request is signed, but anyone on the way can read and replay it"
     fi
     if [[ "$DEPLOY_HEALTH_URL" == http://* ]]; then
         info "warning: the health URL is plain http; anyone on the way can fake its answer"
     fi
+}
+
+# Succeeds if $1 is host:port:address for curl --resolve: a host name, a port from 1 to 65535 and an
+# IPv4 or IPv6 address (checked closely, so a typo fails here and not as a curl error that repeats it)
+deploy_resolve_entry_ok() {
+    local host port address
+    [[ "$1" == *:*:* ]] || return 1
+    host=${1%%:*}
+    port=${1#*:}
+    address=${port#*:}
+    port=${port%%:*}
+    [[ "$host" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*$ && "$port" =~ ^[1-9][0-9]{0,4}$ ]] || return 1
+    ((port <= 65535)) || return 1
+    [[ "$address" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ || "$address" =~ ^([0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}$ ]]
+}
+
+# Succeeds if an entry of DEPLOY_RESOLVE_ARGS is for the host and port of URL $1 (curl ignores the others)
+deploy_resolve_covers() {
+    local host port i entry entry_host entry_port
+    [[ "$1" =~ ^(https?)://([^/:@?#]+)(:([0-9]+))?([/?#]|$) ]] || return 1
+    host=${BASH_REMATCH[2]}
+    port=${BASH_REMATCH[4]}
+    if [[ -z "$port" ]]; then
+        port=80
+        [[ "${BASH_REMATCH[1]}" == https ]] && port=443
+    fi
+    for ((i = 1; i < ${#DEPLOY_RESOLVE_ARGS[@]}; i += 2)); do
+        entry=${DEPLOY_RESOLVE_ARGS[i]}
+        entry_host=${entry%%:*}
+        entry_port=${entry#*:}
+        entry_port=${entry_port%%:*}
+        if [[ "${entry_host,,}" == "${host,,}" && "$entry_port" == "$port" ]]; then
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Prints the HMAC-SHA256 of stdin with the key $1, in hex. The key never appears in a command line
@@ -166,7 +224,7 @@ deploy_call_webhook() {
     body=$(printf '{"ref":"refs/heads/main","after":"%s","sender":"dev-kit"}' "$commit")
     signature=$(printf '%s' "$body" | deploy_hmac_sha256 "$DEPLOY_WEBHOOK_SECRET")
     info "calling the webhook (Dockhand pulls, builds and starts the stack; this can take minutes)"
-    response=$(curl --silent --show-error --max-time "$DEPLOY_TIMEOUT" \
+    response=$(curl --silent --show-error --max-time "$DEPLOY_TIMEOUT" ${DEPLOY_RESOLVE_ARGS[@]+"${DEPLOY_RESOLVE_ARGS[@]}"} \
         -H 'Content-Type: application/json' \
         -H @<(printf 'X-Hub-Signature-256: sha256=%s\n' "$signature") \
         --data-binary "$body" \
@@ -216,7 +274,7 @@ deploy_wait_healthy() {
         info "waiting for $DEPLOY_HEALTH_URL"
     fi
     while ((SECONDS < deadline)); do
-        if body=$(curl --silent --fail --max-time 10 "$DEPLOY_HEALTH_URL" 2> /dev/null); then
+        if body=$(curl --silent --fail --max-time 10 ${DEPLOY_RESOLVE_ARGS[@]+"${DEPLOY_RESOLVE_ARGS[@]}"} "$DEPLOY_HEALTH_URL" 2> /dev/null); then
             if [[ -z "$pattern" ]] || grep -Eq "$pattern" <<< "$body"; then
                 info "healthy${version:+, version $version}"
                 return 0

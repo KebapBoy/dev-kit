@@ -253,6 +253,57 @@ test_deploy_proxy_timeout() {
         && grep -q 'webhook answered 502' "$err"
 }
 
+# DEPLOY_RESOLVE: the entries are validated (the settings are data), and both curl calls get them
+# as --resolve while the URL stays the last argument. curl is a stub that records its arguments in
+# the directory $RESOLVE_DIR.
+test_deploy_resolve() {
+    local dir out bad
+    dir=$(mktemp -d)
+    # A matching entry gives no warning; one for another host or port does
+    printf 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com/x\nDEPLOY_WEBHOOK_SECRET=x\nDEPLOY_RESOLVE=dockhand.example.com:443:192.0.2.10\n' > "$dir/deploy.env"
+    # shellcheck disable=SC2016 # expanded by lib_run
+    lib_run deploy 'deploy_load_config "$1"' "$dir/deploy.env" 2> "$dir/err" || return 1
+    ! grep -q 'no DEPLOY_RESOLVE entry matches' "$dir/err" || return 1
+    printf 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com:8443/x\nDEPLOY_WEBHOOK_SECRET=x\nDEPLOY_RESOLVE=dockhand.example.com:443:192.0.2.10\n' > "$dir/deploy.env"
+    # shellcheck disable=SC2016 # expanded by lib_run
+    lib_run deploy 'deploy_load_config "$1"' "$dir/deploy.env" 2> "$dir/err" || return 1
+    grep -q 'no DEPLOY_RESOLVE entry matches' "$dir/err" || return 1
+    printf 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com/x\nDEPLOY_WEBHOOK_SECRET=x\nDEPLOY_RESOLVE=dockhand.example.com:443:192.0.2.10, myapp.example.com:443:2001:db8::1\n' > "$dir/deploy.env"
+    # shellcheck disable=SC2016 # expanded by lib_run
+    out=$(lib_run deploy 'deploy_load_config "$1" && printf "%s\n" "${DEPLOY_RESOLVE_ARGS[@]}"' "$dir/deploy.env" 2> /dev/null) || return 1
+    [[ $out == $'--resolve\ndockhand.example.com:443:192.0.2.10\n--resolve\nmyapp.example.com:443:2001:db8::1' ]] || return 1
+    for bad in 'dockhand.example.com:192.0.2.10' 'dockhand.example.com:443:192.0.2.10;touch' '-x:443:192.0.2.10' \
+        'a:0:192.0.2.10' 'a:65536:192.0.2.10' 'a:443:192.0.2.1 0' 'a:443:192.0.2' 'a:443:xyz' \
+        'dockhand.example.com:443:192.0.2.10,,a:443:192.0.2.11' 'dockhand.example.com:443:192.0.2.10,a:0:192.0.2.11'; do
+        printf 'DEPLOY_WEBHOOK_URL=https://dockhand.example.com/x\nDEPLOY_WEBHOOK_SECRET=x\nDEPLOY_RESOLVE=%s\n' "$bad" > "$dir/deploy.env"
+        # shellcheck disable=SC2016 # expanded by lib_run
+        ! lib_run deploy 'deploy_load_config "$1"' "$dir/deploy.env" 2> "$dir/err" || return 1
+        grep -q 'DEPLOY_RESOLVE entries look like' "$dir/err" && ! grep -qF -- "$bad" "$dir/err" || return 1
+    done
+    # shellcheck disable=SC2016 # expanded by lib_run
+    RESOLVE_DIR=$dir lib_run deploy '
+        curl() {
+            if [[ "${*: -1}" == "$DEPLOY_WEBHOOK_URL" ]]; then
+                printf "%s\n" "$@" > "$RESOLVE_DIR/webhook.args"
+                printf "{\"success\":true}\n200"
+            else
+                printf "%s\n" "$@" > "$RESOLVE_DIR/health.args"
+                printf "{\"version\":\"1.2.0\"}"
+            fi
+        }
+        sleep() { :; }
+        DEPLOY_WEBHOOK_URL=https://dockhand.example.com/webhook DEPLOY_WEBHOOK_SECRET=x
+        DEPLOY_HEALTH_URL=https://dockhand.example.com/healthz DEPLOY_TIMEOUT=2
+        DEPLOY_RESOLVE_ARGS=(--resolve dockhand.example.com:443:192.0.2.10)
+        deploy_call_webhook 0123456 ""
+        deploy_wait_healthy ""' > /dev/null 2>&1 || return 1
+    grep -qx -- '--resolve' "$dir/webhook.args" && grep -qx 'dockhand.example.com:443:192.0.2.10' "$dir/webhook.args" \
+        && [[ $(tail -n 1 "$dir/webhook.args") == https://dockhand.example.com/webhook ]] \
+        && grep -qx -- '--resolve' "$dir/health.args" && grep -qx 'dockhand.example.com:443:192.0.2.10' "$dir/health.args" \
+        && [[ $(grep -c -x -- '--resolve' "$dir/webhook.args") == 1 ]] \
+        && [[ $(tail -n 1 "$dir/health.args") == https://dockhand.example.com/healthz ]]
+}
+
 # An upstream repository with a release v1.0.0 and a fork of it with a commit of its own
 new_fork() {
     local upstream fork
@@ -385,6 +436,7 @@ check "release: --push pushes main and the tag" test_release_push
 check "deploy: HMAC-SHA256 like openssl" test_deploy_hmac
 check "deploy: the settings are data, not code" test_deploy_config
 check "deploy: refuses an unreleased origin/main" test_deploy_refuses_unreleased
+check "deploy: DEPLOY_RESOLVE is validated and reaches both curl calls" test_deploy_resolve
 check "deploy: a proxy timeout waits for the version or points to Dockhand" test_deploy_proxy_timeout
 check "fork-sync: releases, commits, clean and conflicting merges" test_fork_sync
 check "fork-sync: needs a remote upstream" test_fork_sync_needs_upstream
