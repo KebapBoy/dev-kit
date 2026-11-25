@@ -72,7 +72,8 @@ cp "$src/Dockerfile" "$tmp/host/.devcontainer/Dockerfile"
 cd "$tmp/host"
 
 first_run() {
-    prepare && grep -q 'cloning' "$tmp/prepare.log" && ! grep -q 'warning' "$tmp/prepare.log"
+    prepare && grep -q 'cloning' "$tmp/prepare.log" && ! grep -q 'warning' "$tmp/prepare.log" \
+        && grep -q "recording the layout 'root'" "$tmp/prepare.log"
 }
 check "prepare clones without a warning" first_run
 check "CLAUDE.md is copied" grep -qx '# my rules' "$HOME/.config/dev-kit/CLAUDE.md"
@@ -186,11 +187,54 @@ show_escapes() {
 }
 check "show makes control characters visible" show_escapes
 
+# A fork keeps its own files next to upstream's: .devcontainer/Dockerfile, and both files in
+# .devcontainer/fork/ when upstream has a devcontainer of its own. prepare records the layout in
+# ./layout and refuses when the repository changes it; diff and show use the recorded one, so what
+# the volume holds cannot change which files they compare
+check "prepare records the layout" grep -qx root layout
+in_volume 'printf "FROM scratch AS dev\nRUN true\n" > .devcontainer/Dockerfile'
+layout_refused() {
+    ! prepare && grep -q "now in the layout 'devcontainer', but ./layout records 'root'" "$tmp/prepare.log"
+}
+check "prepare refuses a layout the repository changed to" layout_refused
+recorded_layout_used() {
+    local out
+    out=$("$script" diff dev-kit-test) && return 1
+    [[ $out == *'+++ repository: Dockerfile'* && $out == *'+LABEL x=y'* && $out != *'RUN true'* ]]
+}
+check "diff compares the recorded layout, whatever the volume holds now" recorded_layout_used
+rm layout
+fork_dockerfile() {
+    local out
+    prepare && grep -qx devcontainer layout \
+        && grep -q "repository's .devcontainer/Dockerfile differs" "$tmp/prepare.log" || return 1
+    out=$("$script" diff dev-kit-test) && return 1
+    [[ $out == *'+++ repository: .devcontainer/Dockerfile'* && $out == *'+RUN true'* && $out != *'LABEL x=y'* ]] \
+        && [[ $out == *'+++ repository: .devcontainer/devcontainer.json'* ]] \
+        && [[ $("$script" show dev-kit-test Dockerfile 2> "$tmp/shown.err") == $'FROM scratch AS dev\nRUN true' ]] \
+        && grep -q 'showing .devcontainer/Dockerfile' "$tmp/shown.err"
+}
+check "with the layout devcontainer the fork's own Dockerfile is compared" fork_dockerfile
+in_volume 'mkdir .devcontainer/fork && printf "{ \"name\": \"fork\" }\n" > .devcontainer/fork/devcontainer.json'
+fork_directory() {
+    local out
+    ! prepare && grep -q "now in the layout 'fork', but ./layout records 'devcontainer'" "$tmp/prepare.log" || return 1
+    echo fork > layout
+    out=$("$script" diff dev-kit-test) && return 1
+    [[ $out == *'+++ repository: .devcontainer/fork/devcontainer.json'* && $out == *'+++ repository: .devcontainer/fork/Dockerfile'* ]] \
+        && [[ $("$script" show dev-kit-test devcontainer.json 2> /dev/null) == '{ "name": "fork" }' ]] \
+        && ! "$script" show dev-kit-test Dockerfile 2> "$tmp/shown.err" \
+        && grep -q 'cannot read .devcontainer/fork/Dockerfile' "$tmp/shown.err"
+}
+check "with the layout fork both files are taken from .devcontainer/fork/" fork_directory
+in_volume 'rm -rf .devcontainer/fork .devcontainer/Dockerfile'
+rm layout
+
 # What the volume holds cannot make the reading container hang or grow
 in_volume 'ln -sf /dev/zero .devcontainer/devcontainer.json && head -c 3000000 /dev/zero | tr "\0" x > Dockerfile'
 limits() {
     local size
-    timeout 60 "$script" show dev-kit-test devcontainer.json > "$tmp/shown" || return 1
+    ! timeout 60 "$script" show dev-kit-test devcontainer.json > "$tmp/shown" 2> /dev/null || return 1
     [[ ! -s $tmp/shown ]] || return 1
     size=$(timeout 60 "$script" show dev-kit-test Dockerfile | wc -c)
     ((size == 1048576))

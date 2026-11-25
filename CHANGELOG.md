@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `dev-kit-host diff`, `show` and the warning of `prepare` work for forks, whose upstream keeps the `Dockerfile` in the root: a fork keeps its own as `.devcontainer/Dockerfile`, or both files in `.devcontainer/fork/` when upstream has a devcontainer of its own. `prepare` records which of the three layouts a repository has in the file `layout` of the host folder and refuses to go on when the repository changes it (delete `layout` after reading what changed), so code in the container cannot hide a change from `diff`. Repositories of your own are unaffected.
+
+### Changed
+
+- `dev-kit-host show` names the file it reads on stderr and fails when the repository has no such regular file, instead of printing nothing.
+
 ## [1.0.2] - 2026-11-24
 
 ### Changed

@@ -127,7 +127,7 @@ A feature cannot run anything on the host, so `initializeCommand` calls [host/de
 1. copies your `~/.claude/CLAUDE.md` (or an empty file, so the repository works for everyone) to `~/.config/dev-kit/CLAUDE.md`, and creates `~/.config/dev-kit/claude-code/` and `etc/` if they are missing, because a bind mount fails without its source,
 2. clones the repository into the volume `<name>-workspace` if it holds none yet, with your SSH agent and only the host keys in your `~/.ssh/known_hosts` (a path on the host works too); it refuses while a container uses the volume, which could otherwise put hooks into the clone,
 3. records the repository in `repository` for `dev-kit-host push` (and refuses to start if `initializeCommand` names another one than recorded: delete `repository` if the repository moved), and for an SSH repository creates the key `etc/deploy-key` if it is missing (add `etc/deploy-key.pub` to the repository as a read-only deploy key) and copies the server's host keys from your `~/.ssh/known_hosts` to `etc/known_hosts`,
-4. warns if the repository's `.devcontainer/devcontainer.json` or `Dockerfile` differs from the copy here.
+4. warns if the repository's `.devcontainer/devcontainer.json` or `Dockerfile` differs from the copy here (for a fork, see [Forks](#forks) which files these are).
 
 It reads the volume only in throwaway containers (`alpine/git`, pinned by digest) as UID 1000, without capabilities (except the one that hands a fresh volume to UID 1000) or new privileges (a setuid program left in the volume does nothing), without network except for cloning and pushing, and at most 1 MiB of a file within 20 seconds. Nothing from the volume runs on the host, and the host builds nothing from it.
 
@@ -218,6 +218,8 @@ Merging upstream/main into HEAD conflicts in:
 To merge and resolve them: git merge upstream/main
 result: conflicts
 ```
+
+A fork gets a devcontainer like your own repositories (code in the volume, configuration on the host), because code from upstream is the most foreign code there is. Its files live next to upstream's, where a merge cannot conflict with them: `.devcontainer/devcontainer.json` and, if upstream's Dockerfile has no stage `dev`, a `.devcontainer/Dockerfile` of the fork's own; if upstream has a devcontainer of its own, both go to `.devcontainer/fork/`. `dev-kit-host diff`, `show` and the warning of `prepare` then compare the host's copies with these files instead of the `Dockerfile` in the root. Which of the three layouts a repository has, `prepare` records in the host folder in `layout` (`root`, `devcontainer` or `fork`), like the repository in `repository`: if the repository later changes it, `prepare` refuses to start the container until you have read what changed and deleted `layout`, so code in the container cannot hide a change by adding files. `show` names the file it reads.
 
 The merge is tried in memory (`git merge-tree`, git 2.38 or newer). `--to v2.4.0` tries a release instead of the branch, `--branch` picks another upstream branch. What upstream wrote (commit subjects, tag names) is shown without control characters, and the upstream URL without credentials. The last line is `result: up-to-date`, `result: clean` or `result: conflicts`.
 

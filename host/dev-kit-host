@@ -16,9 +16,9 @@ GIT_IMAGE="alpine/git:v2.52.0@sha256:4a0e72d49596a1f5d3701aeedafdadc5c0da4062be4
 # The user of the devcontainer, who owns the files in the volume
 DEV_UID=1000
 CONFIG_DIR="$HOME/.config/dev-kit"
-# The files the host keeps a copy of: in the repository, and here
-REPO_FILES=(.devcontainer/devcontainer.json Dockerfile)
+# The files the host keeps a copy of: here, and where the repository has them (set by repo_files)
 HOST_FILES=(.devcontainer/devcontainer.json .devcontainer/Dockerfile)
+REPO_FILES=()
 # At most this much of a file from the volume is read, within this many seconds
 MAX_BYTES=1048576
 MAX_SECONDS=20
@@ -59,6 +59,13 @@ show     Shows one of the repository's files; with --raw unchanged, to save it i
 push     Pushes branches and tags from the volume to the repository recorded by prepare, after
          showing what is new and asking (--yes: without asking). The devcontainer itself gets
          only an agent that can sign, not push; this is the way out.
+
+The repository's counterparts of the two copies are .devcontainer/devcontainer.json and the
+Dockerfile in its root. A fork, whose upstream has the Dockerfile in the root, keeps its own as
+.devcontainer/Dockerfile; if upstream has a devcontainer of its own, both files are in
+.devcontainer/fork/. prepare records which of the three layouts the repository has in ./layout,
+and refuses when the repository changes it (delete ./layout after reading what changed); diff and
+show use the recorded layout and name the files they read.
 
 diff and show make control characters visible: what the repository holds was written in the
 container. Read it before you take anything over into the copies here.
@@ -112,6 +119,35 @@ in_volume() {
 # Prints at most MAX_BYTES of a file in the volume (nothing if it is missing)
 volume_file() {
     in_volume "$1" "if [ -f '$2' ]; then timeout $MAX_SECONDS head -c $MAX_BYTES '$2'; fi"
+}
+
+# Where the repository keeps the files the host holds copies of (the layout): root, like a
+# repository of your own (.devcontainer/devcontainer.json and the Dockerfile in the root);
+# devcontainer, a fork whose upstream has the Dockerfile in the root and which keeps its own as
+# .devcontainer/Dockerfile; fork, a fork whose upstream has a devcontainer of its own and which
+# keeps both files in .devcontainer/fork/. Prints the layout the volume holds now.
+probe_layout() {
+    local layout
+    layout=$(in_volume "$1" 'if [ -f .devcontainer/fork/devcontainer.json ]; then echo fork
+        elif [ -f .devcontainer/Dockerfile ]; then echo devcontainer; fi') \
+        || fail "cannot read the volume $1"
+    echo "${layout:-root}"
+}
+
+# Sets REPO_FILES, the repository's counterparts of HOST_FILES, for the layout recorded in ./layout
+# by prepare (root if there is none yet). The layout is a decision of the host, like the repository
+# in ./repository: what the volume holds cannot change which files diff and show compare.
+repo_files() {
+    local layout=root
+    if [[ -f layout ]]; then
+        layout=$(< layout)
+    fi
+    case $layout in
+        root) REPO_FILES=(.devcontainer/devcontainer.json Dockerfile) ;;
+        devcontainer) REPO_FILES=(.devcontainer/devcontainer.json .devcontainer/Dockerfile) ;;
+        fork) REPO_FILES=(.devcontainer/fork/devcontainer.json .devcontainer/fork/Dockerfile) ;;
+        *) fail "./layout does not hold root, devcontainer or fork" ;;
+    esac
 }
 
 # Prints the SSH server of a repository URL (nothing for a path or https), with a port other than
@@ -239,6 +275,19 @@ cmd_prepare() {
     printf '%s\n' "$repository" > repository
     deploy_key "$name" "$repository"
 
+    # Which files the repository keeps its devcontainer files in: a decision, like the repository
+    # (a container could otherwise hide a change by adding .devcontainer/fork/ files)
+    local layout
+    layout=$(probe_layout "$volume")
+    if [[ -s layout && $(< layout) != "$layout" ]]; then
+        fail "the repository's devcontainer files are now in the layout '$layout', but ./layout records '$(< layout)'; read what changed (diff still compares the recorded one), then delete ./layout if that is right"
+    fi
+    if [[ ! -s layout ]]; then
+        echo "dev-kit-host: recording the layout '$layout' of the repository's devcontainer files in ./layout" \
+            "(diff and show compare those from now on; a layout other than root is expected only for a fork)" >&2
+    fi
+    printf '%s\n' "$layout" > layout
+    repo_files
     for i in "${!REPO_FILES[@]}"; do
         if [[ -f ${HOST_FILES[i]} ]] && ! volume_file "$volume" "${REPO_FILES[i]}" | cmp -s - "${HOST_FILES[i]}"; then
             echo "dev-kit-host: warning: the repository's ${REPO_FILES[i]} differs from" \
@@ -253,6 +302,7 @@ cmd_diff() {
     check_folder
     check_volume "$1-workspace"
     local i status=0
+    repo_files
     for i in "${!REPO_FILES[@]}"; do
         [[ -f ${HOST_FILES[i]} ]] || continue
         # cat -v: what the repository holds must not reach the terminal as control characters
@@ -273,11 +323,14 @@ cmd_show() {
     check_folder
     check_volume "$1-workspace"
     local file
+    repo_files
     case $2 in
-        devcontainer.json) file=.devcontainer/devcontainer.json ;;
-        Dockerfile) file=Dockerfile ;;
+        devcontainer.json) file=${REPO_FILES[0]} ;;
+        Dockerfile) file=${REPO_FILES[1]} ;;
         *) fail "show takes devcontainer.json or Dockerfile" ;;
     esac
+    in_volume "$1-workspace" "test -f '$file'" || fail "cannot read $file from the repository (missing, not a regular file, or the volume is unreadable)"
+    echo "dev-kit-host: showing $file" >&2
     if ! $raw; then
         volume_file "$1-workspace" "$file" | cat -v
     elif [[ -t 1 ]]; then
