@@ -181,6 +181,14 @@ diff_shows() {
         && [[ $out == *'^['* && $out != *$'\033'* ]]
 }
 check "diff shows both changes with control characters visible" diff_shows
+in_volume 'printf "# \000\nLABEL hidden=1\n\tRUN true\n" > Dockerfile'
+diff_shows_binary() {
+    local out
+    out=$("$script" diff dev-kit-test) && return 1
+    [[ $out == *'+# ^@'* && $out == *'+LABEL hidden=1'* && $out == *'+^IRUN true'* && $out != *'Binary'* ]]
+}
+check "diff shows what a file with a NUL holds, and tabs" diff_shows_binary
+in_volume 'printf "FROM scratch AS dev\nLABEL x=y\n" > Dockerfile'
 in_volume 'printf "\033]0;title\007{}\n" > .devcontainer/devcontainer.json'
 show_escapes() {
     [[ $("$script" show dev-kit-test devcontainer.json) == '^[]0;title^G{}' ]]

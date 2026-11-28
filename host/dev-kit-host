@@ -296,6 +296,13 @@ cmd_prepare() {
     done
 }
 
+# diff -u of a host copy and what the repository holds ($1 and $2 the labels): -a so that no byte
+# (a NUL) makes diff call a file binary and hide what it holds, cat -vT so that no control
+# character reaches the terminal and no tab moves text where it seems to be another line
+show_diff() {
+    LC_ALL=C diff -a -u --label "$1" --label "$2" "$3" "$4" | cat -vT
+}
+
 cmd_diff() {
     check_args 1 "$@"
     check_name "$1"
@@ -305,9 +312,8 @@ cmd_diff() {
     repo_files
     for i in "${!REPO_FILES[@]}"; do
         [[ -f ${HOST_FILES[i]} ]] || continue
-        # cat -v: what the repository holds must not reach the terminal as control characters
-        diff -u --label "host: ${HOST_FILES[i]}" --label "repository: ${REPO_FILES[i]}" \
-            "${HOST_FILES[i]}" <(volume_file "$1-workspace" "${REPO_FILES[i]}") | cat -v || status=1
+        show_diff "host: ${HOST_FILES[i]}" "repository: ${REPO_FILES[i]}" \
+            "${HOST_FILES[i]}" <(volume_file "$1-workspace" "${REPO_FILES[i]}") || status=1
     done
     return $status
 }

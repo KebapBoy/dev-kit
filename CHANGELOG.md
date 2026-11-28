@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `dev-kit-host show` names the file it reads on stderr and fails when the repository has no such regular file, instead of printing nothing.
 
+### Fixed
+
+- `dev-kit-host diff` shows what a repository's file holds even when it contains a NUL byte: before, diff called such a file binary and showed none of its content, so a change to the `Dockerfile` or `devcontainer.json` could go unread. Tabs are now shown as `^I`, so they cannot push text to where it looks like another line.
+
 ## [1.0.2] - 2026-11-24
 
 ### Changed
