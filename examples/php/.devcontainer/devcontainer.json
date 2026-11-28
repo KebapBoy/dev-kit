@@ -1,7 +1,9 @@
 // Devcontainer: stage "dev" of the Dockerfile, the dev-kit feature (Claude Code with the shared
 // configuration, git, just, dev-kit) with Docker inside for just demo. Docker needs the runtime
 // sysbox-runc (Sysbox on the host): it keeps the container unprivileged.
-// .devcontainer/serve.sh runs the app from the working tree on port 8000 (PHP's built-in server).
+// Nothing starts when the container starts: Run and Debug (F5, .vscode/launch.json) installs the
+// dependencies (just install) and starts the app from the working tree with Xdebug on port 8000
+// (PHP's built-in server).
 //
 // The host does not use this file or the Dockerfile from the repository: copy both to
 // ~/.config/dev-kit/myapp/.devcontainer/ and open ~/.config/dev-kit/myapp in VS Code ("Reopen in
@@ -46,14 +48,15 @@
         "8000": { "label": "myapp (working tree)" },
         "8080": { "label": "myapp (demo)", "onAutoForward": "silent" }
     },
-    "postCreateCommand": "{ test -f .env || cp .env.example .env; } && composer install",
-    // VS Code runs this in a terminal that hangs up when the command returns: the dev server
-    // ignores that (trap) and leaves the terminal's session (setsid)
-    "postStartCommand": "trap '' HUP; setsid .devcontainer/serve.sh > /tmp/serve.log 2>&1 &",
+    // Other ports stay in the container (e.g. those of a debugger): forward them by hand if needed
+    "otherPortsAttributes": { "onAutoForward": "ignore" },
+    // Only the settings for development; the dependencies are installed by just install
+    "postCreateCommand": "test -f .env || cp .env.example .env",
     "customizations": {
         "vscode": {
             "extensions": [
                 "bmewburn.vscode-intelephense-client",
+                "xdebug.php-debug",
                 "SanderRonde.phpstan-vscode",
                 "junstyle.php-cs-fixer",
                 "editorconfig.editorconfig"

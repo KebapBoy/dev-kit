@@ -17,10 +17,12 @@ COPY VERSION ./
 COPY public ./public
 COPY src ./src
 
-# Devcontainer: user dev (UID 1000) with Composer and what PHPStan and PHP-CS-Fixer need. Claude
-# Code, git, just and dev-kit come from the dev-kit feature (.devcontainer/devcontainer.json).
+# Devcontainer: user dev (UID 1000) with Composer, what PHPStan and PHP-CS-Fixer need, and Xdebug.
+# Alpine installs Xdebug without loading it, so the checks stay fast; the debug configuration
+# (.vscode/launch.json) loads it. Claude Code, git, just and dev-kit come from the dev-kit feature
+# (.devcontainer/devcontainer.json).
 FROM base AS dev
-RUN apk add --no-cache php85-dom php85-iconv php85-phar php85-tokenizer php85-xml php85-xmlwriter \
+RUN apk add --no-cache php85-dom php85-iconv php85-phar php85-tokenizer php85-xml php85-xmlwriter php85-pecl-xdebug \
     && adduser -D -u 1000 -s /bin/sh dev
 COPY --from=composer /usr/bin/composer /usr/local/bin/composer
 USER dev

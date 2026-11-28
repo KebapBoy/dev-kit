@@ -7,18 +7,22 @@ set positional-arguments
 default:
     @just --list
 
+# Install the dependencies, only when package-lock.json changed since the last install
+install:
+    test node_modules/.package-lock.json -nt package-lock.json || npm ci
+
 # Type check, lint, tests
-check:
+check: install
     npm run check
     npm run lint
     npm test
 
 # Format everything
-fmt:
+fmt: install
     npm run format
 
 # Dev server with hot reload on port 5173
-serve:
+serve: install
     npm run dev -- --host 0.0.0.0 --port 5173 --strictPort
 
 # The demo: the image with the sample data, at http://127.0.0.1:8080

@@ -8,18 +8,22 @@ set dotenv-load
 default:
     @just --list
 
+# Download the modules
+install:
+    go mod download
+
 # Formatting, linters (golangci-lint with go vet and staticcheck), tests with the race detector
-check:
+check: install
     golangci-lint fmt --diff
     golangci-lint run
     go test -race ./...
 
 # Format (gofmt, goimports)
-fmt:
+fmt: install
     golangci-lint fmt
 
 # The app from the working tree on port 8000
-serve:
+serve: install
     MYAPP_ADDR=:8000 MYAPP_DATA_DIR=/tmp/myapp-dev go run ./cmd/myapp
 
 # The demo: the image with the sample data, at http://127.0.0.1:8080

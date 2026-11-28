@@ -18,8 +18,9 @@ COPY internal ./internal
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /myapp ./cmd/myapp
 
-# Devcontainer: user dev (UID 1000) with Go, gopls, golangci-lint and gcc (for the race detector).
-# Claude Code, git, just and dev-kit come from the dev-kit feature (.devcontainer/devcontainer.json).
+# Devcontainer: user dev (UID 1000) with Go, gopls, golangci-lint, Delve (the debugger of
+# .vscode/launch.json) and gcc (for the race detector). Claude Code, git, just and dev-kit come from
+# the dev-kit feature (.devcontainer/devcontainer.json).
 FROM base AS dev
 RUN apt-get update \
     && apt-get install -y --no-install-recommends gcc libc6-dev \
@@ -30,6 +31,7 @@ ENV PATH=/home/dev/go/bin:/usr/local/go/bin:$PATH
 USER dev
 RUN go install golang.org/x/tools/gopls@v0.24.0 \
     && go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 \
+    && go install github.com/go-delve/delve/cmd/dlv@v1.27.2 \
     && go clean -cache -modcache
 
 # The app: user myapp (UID 1000), state in /data. VERSION labels the image when a build sets it

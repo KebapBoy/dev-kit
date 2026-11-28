@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The examples no longer install the dependencies and start the app when the devcontainer starts (`postStartCommand` and `.devcontainer/serve.sh` are gone; `postCreateCommand` only copies `.env.example` to `.env`). Instead `.vscode/launch.json` starts the app from the working tree with the debugger of the stack (Run and Debug, F5): the dev server in a JavaScript Debug Terminal, debugpy, Delve (now in the Go stage `dev`) or Xdebug (now in the PHP stage `dev`, loaded only for the debug session). Its task `install` runs the new recipe `just install` first, which `check`, `fmt` and `serve` also run, so a fresh devcontainer installs the dependencies when they are first needed. Ports the examples do not list, such as a debugger's, are no longer forwarded automatically, and Xdebug's client listens only on `127.0.0.1`.
 - `dev-kit-host show` names the file it reads on stderr and fails when the repository has no such regular file, instead of printing nothing.
 
 ### Fixed

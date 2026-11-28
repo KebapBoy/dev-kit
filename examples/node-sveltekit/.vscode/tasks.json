@@ -1,0 +1,15 @@
+// Tasks of the devcontainer. "install" runs before every debug session (.vscode/launch.json), so
+// the dependencies are installed when you start the app, not when the container starts.
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "install",
+            "detail": "Install the dependencies (just install)",
+            "type": "shell",
+            "command": "just install",
+            "presentation": { "reveal": "silent", "panel": "shared" },
+            "problemMatcher": []
+        }
+    ]
+}

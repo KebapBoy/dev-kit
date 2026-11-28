@@ -1,0 +1,32 @@
+// Run and Debug (F5) in the devcontainer: the app from the working tree at http://localhost:8000 on
+// PHP's built-in server, with Xdebug loaded for this server only (every request is debugged).
+// Settings come from .env; the rest is what just serve sets.
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "myapp (working tree)",
+            "type": "php",
+            "request": "launch",
+            "runtimeArgs": [
+                "-dzend_extension=xdebug.so",
+                "-dxdebug.mode=debug",
+                "-dxdebug.start_with_request=yes",
+                "-S",
+                "0.0.0.0:8000",
+                "-t",
+                "public",
+                "public/index.php"
+            ],
+            "program": "",
+            "cwd": "${workspaceFolder}",
+            "port": 9003,
+            "hostname": "127.0.0.1",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "MYAPP_DATA_DIR": "/tmp/myapp-dev"
+            },
+            "preLaunchTask": "install"
+        }
+    ]
+}

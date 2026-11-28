@@ -8,20 +8,24 @@ set dotenv-load
 default:
     @just --list
 
+# Install the dependencies into the environment (/home/dev/.venv)
+install:
+    uv sync
+
 # Lint, format check, type check, tests
-check:
+check: install
     uv run ruff check
     uv run ruff format --check
     uv run mypy
     uv run pytest
 
 # Format and sort imports
-fmt:
+fmt: install
     uv run ruff check --select I --fix
     uv run ruff format
 
 # The app from the working tree on port 8000
-serve:
+serve: install
     MYAPP_HOST=0.0.0.0 MYAPP_PORT=8000 MYAPP_DATA_DIR=/tmp/myapp-dev uv run myapp
 
 # The demo: the image with the sample data, at http://127.0.0.1:8080

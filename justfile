@@ -4,7 +4,7 @@
 shellcheck_image := "koalaman/shellcheck:v0.11.0"
 shfmt_image := "mvdan/shfmt:v3.12.0"
 actionlint_image := "rhysd/actionlint:1.7.12"
-scripts := "src/dev-kit/install.sh src/dev-kit/docker-init.sh src/dev-kit/bin/dev-kit src/dev-kit/lib host/dev-kit-host test/host.sh test/dev-kit .github/install-just.sh .github/install-sysbox.sh examples/*/.devcontainer/serve.sh examples/php/docker/entrypoint.sh"
+scripts := "src/dev-kit/install.sh src/dev-kit/docker-init.sh src/dev-kit/bin/dev-kit src/dev-kit/lib host/dev-kit-host test/host.sh test/dev-kit .github/install-just.sh .github/install-sysbox.sh examples/php/docker/entrypoint.sh"
 devcontainer_cli := "@devcontainers/cli@0.80.1"
 
 # List the recipes
@@ -18,8 +18,7 @@ check: check-examples
     docker run --rm -v "$PWD:/mnt:ro" -w /mnt {{ shellcheck_image }} -x \
         src/dev-kit/install.sh src/dev-kit/docker-init.sh src/dev-kit/bin/dev-kit \
         src/dev-kit/lib/*.sh host/dev-kit-host test/host.sh test/dev-kit/*.sh .github/install-just.sh \
-        .github/install-sysbox.sh \
-        examples/*/.devcontainer/serve.sh examples/php/docker/entrypoint.sh
+        .github/install-sysbox.sh examples/php/docker/entrypoint.sh
     docker run --rm -v "$PWD:/repo:ro" -w /repo {{ actionlint_image }}
 
 # The compose files of every example are valid (deploy/compose.yaml with every variable set)

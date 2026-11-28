@@ -1,0 +1,21 @@
+// Run and Debug (F5) in the devcontainer: the app from the working tree at http://localhost:8000,
+// built and run by Delve. Settings come from .env; the rest is what just serve sets.
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "myapp (working tree)",
+            "type": "go",
+            "request": "launch",
+            "mode": "debug",
+            "program": "${workspaceFolder}/cmd/myapp",
+            "cwd": "${workspaceFolder}",
+            "envFile": "${workspaceFolder}/.env",
+            "env": {
+                "MYAPP_ADDR": ":8000",
+                "MYAPP_DATA_DIR": "/tmp/myapp-dev"
+            },
+            "preLaunchTask": "install"
+        }
+    ]
+}

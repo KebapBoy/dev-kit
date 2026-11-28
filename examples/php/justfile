@@ -8,18 +8,22 @@ set dotenv-load
 default:
     @just --list
 
+# Install the dependencies (vendor/)
+install:
+    composer install
+
 # Coding style (PHP-CS-Fixer), static analysis (PHPStan), tests (PHPUnit)
-check:
+check: install
     vendor/bin/php-cs-fixer check --diff
     vendor/bin/phpstan analyse
     vendor/bin/phpunit
 
 # Format (PHP-CS-Fixer)
-fmt:
+fmt: install
     vendor/bin/php-cs-fixer fix
 
 # The app from the working tree on port 8000 (PHP's built-in server, every request to index.php)
-serve:
+serve: install
     MYAPP_DATA_DIR=/tmp/myapp-dev php -S 0.0.0.0:8000 -t public public/index.php
 
 # The demo: the image with the sample data, at http://127.0.0.1:8080

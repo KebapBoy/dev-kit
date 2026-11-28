@@ -1,0 +1,16 @@
+// Run and Debug (F5) in the devcontainer: the dev server with hot reload at http://localhost:5173,
+// in a JavaScript Debug Terminal, so breakpoints in server code (load functions, actions, +server
+// routes) hold. Settings come from .env.
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "myapp (dev server)",
+            "type": "node-terminal",
+            "request": "launch",
+            "command": "just serve",
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "install"
+        }
+    ]
+}
