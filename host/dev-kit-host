@@ -22,12 +22,15 @@ REPO_FILES=()
 # At most this much of a file from the volume is read, within this many seconds
 MAX_BYTES=1048576
 MAX_SECONDS=20
+# A longer difference of a release's devcontainer files is not offered for taking over
+MAX_DIFF_LINES=200
 
 # ssh needs a user name for the UID it runs as, which the image does not have
-PASSWD=$(mktemp)
+WORK_DIR=$(mktemp -d)
+PASSWD=$WORK_DIR/passwd
 PUSH_VOLUME=
 cleanup() {
-    rm -f "$PASSWD"
+    rm -rf "$WORK_DIR"
     if [[ -n $PUSH_VOLUME ]]; then
         docker volume rm "$PUSH_VOLUME" > /dev/null 2>&1 || :
     fi
@@ -58,7 +61,10 @@ show     Shows one of the repository's files; with --raw unchanged, to save it i
          (never to a terminal).
 push     Pushes branches and tags from the volume to the repository recorded by prepare, after
          showing what is new and asking (--yes: without asking). The devcontainer itself gets
-         only an agent that can sign, not push; this is the way out.
+         only an agent that can sign, not push; this is the way out. When it pushes a release
+         tag (v<x.y.z>), or else main (or master), it also shows how the copies here differ from
+         the files there and, after the push, asks whether to take them over (--yes never takes
+         them over).
 
 The repository's counterparts of the two copies are .devcontainer/devcontainer.json and the
 Dockerfile in its root. A fork, whose upstream has the Dockerfile in the root, keeps its own as
@@ -445,6 +451,129 @@ SHOW_NEW='
     done < /push/refs | cut -c -150 | sed "s/ *$//"
 '
 
+# Prints a file of a pushed ref unchanged ($1 the full ref, $2 path, $3 at most that many bytes):
+# exits 3 when the ref has no such file, 4 when it is no regular file or too large
+# shellcheck disable=SC2016 # runs in the container
+REF_FILE='
+    set -e
+    cd /push/repo.git
+    entry=$(git ls-tree "$1" -- "$2")
+    [ -n "$entry" ] || exit 3
+    set -- "$1" "$2" "$3" $entry
+    case $4 in 100644 | 100755) ;; *) exit 4 ;; esac
+    [ "$(git cat-file -s "$6")" -le "$3" ] || exit 4
+    timeout 60 git cat-file blob "$6"
+'
+
+# True if a file holds control characters other than tab and line feed: such a file is not
+# offered, since its diff cannot show plainly what it holds
+has_controls() {
+    (($(LC_ALL=C tr -d '\t\n\040-\176\200-\377' < "$1" | head -c 1 | wc -c) > 0))
+}
+
+# Before the push question: if a release tag (the highest v<x.y.z> among the tags) or else the
+# branch main (or master) is pushed, shows how the repository's devcontainer files there differ
+# from the copies here, and records in OFFER_FILES which of them can be offered for taking over
+# after the push. Other branches are work in progress and are not compared.
+OFFER_REF=
+OFFER_NAME=
+OFFER_FILES=()
+compare_copies() {
+    local volume=$1 refs i new status lines
+    # The refs were checked by name before they were taken over, so cat -v changes nothing here
+    refs=$(in_push "$volume" 'cat /push/refs' --network none --)
+    OFFER_NAME=$(sed -n 's|^refs/tags/||p' <<< "$refs" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1) || :
+    if [[ -n $OFFER_NAME ]]; then
+        OFFER_REF=refs/tags/$OFFER_NAME
+    elif grep -qx refs/heads/main <<< "$refs"; then
+        OFFER_REF=refs/heads/main OFFER_NAME=main
+    elif grep -qx refs/heads/master <<< "$refs"; then
+        OFFER_REF=refs/heads/master OFFER_NAME=master
+    else
+        return 0
+    fi
+    repo_files
+    echo "dev-kit-host: the devcontainer files of $OFFER_NAME against the copies here:"
+    for i in "${!REPO_FILES[@]}"; do
+        [[ -f ${HOST_FILES[i]} ]] || continue
+        new="$WORK_DIR/ref-$i"
+        status=0
+        throwaway --network none --mount "type=volume,src=$volume,dst=/push,readonly,volume-nocopy" \
+            --user "$DEV_UID:$DEV_UID" --entrypoint sh "$GIT_IMAGE" -c "$REF_FILE" sh \
+            "$OFFER_REF" "${REPO_FILES[i]}" "$MAX_BYTES" > "$new" 2> "$WORK_DIR/ref.err" || status=$?
+        case $status in
+            0) ;;
+            3)
+                echo "  ${HOST_FILES[i]}: $OFFER_NAME has no ${REPO_FILES[i]}; nothing to take over"
+                continue
+                ;;
+            4)
+                echo "  ${HOST_FILES[i]}: ${REPO_FILES[i]} in $OFFER_NAME is no regular file of at most" \
+                    "$MAX_BYTES bytes; it is not taken over"
+                continue
+                ;;
+            *)
+                cat -v "$WORK_DIR/ref.err" >&2
+                fail "could not read ${REPO_FILES[i]} from $OFFER_NAME"
+                ;;
+        esac
+        if cmp -s "$new" "${HOST_FILES[i]}"; then
+            echo "  ${HOST_FILES[i]}: the same as ${REPO_FILES[i]} in $OFFER_NAME"
+            continue
+        fi
+        if has_controls "$new"; then
+            echo "  ${HOST_FILES[i]}: ${REPO_FILES[i]} in $OFFER_NAME holds control characters other than" \
+                "tab and line feed; it is not taken over (read it with: git show $OFFER_NAME:${REPO_FILES[i]} | cat -A)"
+            continue
+        fi
+        show_diff "host: ${HOST_FILES[i]}" "$OFFER_NAME: ${REPO_FILES[i]}" "${HOST_FILES[i]}" "$new" \
+            > "$WORK_DIR/diff-$i" || :
+        lines=$(wc -l < "$WORK_DIR/diff-$i")
+        if ((lines > MAX_DIFF_LINES)); then
+            echo "  ${HOST_FILES[i]}: the change has $lines lines, more than can be read before a" \
+                "question here; it is not taken over (compare it yourself and take it over by hand)"
+            continue
+        fi
+        cat "$WORK_DIR/diff-$i"
+        OFFER_FILES+=("$i")
+    done
+}
+
+# After the push: offers to take the files compare_copies showed over into the copies here. Only
+# what you were shown, only when you answer in the terminal, never with --yes.
+offer_copies() {
+    local name=$1 yes=$2 i added removed answer=""
+    [[ -n $OFFER_NAME ]] || return 0
+    if ((${#OFFER_FILES[@]} == 0)); then
+        echo "dev-kit-host: nothing of $OFFER_NAME to take over into the copies here"
+        return
+    fi
+    echo "dev-kit-host: $OFFER_NAME changes the devcontainer files (the differences are shown above):"
+    for i in "${OFFER_FILES[@]}"; do
+        added=$(tail -n +3 "$WORK_DIR/diff-$i" | grep -c '^+' || :)
+        removed=$(tail -n +3 "$WORK_DIR/diff-$i" | grep -c '^-' || :)
+        echo "  ${HOST_FILES[i]}: $added line(s) added, $removed removed"
+    done
+    if $yes; then
+        echo "dev-kit-host: push --yes never takes them over: read the differences, then push again" \
+            "without --yes to be asked" >&2
+        return
+    fi
+    # What was typed ahead (a second y during the push) must not answer this question
+    while read -r -s -t 0.2 -n 1 _ < /dev/tty; do :; done
+    read -r -p "Take them over into the copies here? [y/N] " answer < /dev/tty || :
+    if [[ $answer != [yYjJ] ]]; then
+        echo "dev-kit-host: the copies here stay as they are; take changes over by hand (dev-kit-host diff $name)"
+        return
+    fi
+    for i in "${OFFER_FILES[@]}"; do
+        # Keeps the copy's owner and mode
+        cat "$WORK_DIR/ref-$i" > "${HOST_FILES[i]}"
+        echo "dev-kit-host: took ${REPO_FILES[i]} of $OFFER_NAME over into ${HOST_FILES[i]}"
+    done
+    echo "dev-kit-host: rebuild the devcontainer to use them (VS Code: \"Dev Containers: Rebuild Container\")"
+}
+
 cmd_push() {
     local yes=false
     if [[ ${1:-} == --yes ]]; then
@@ -490,15 +619,18 @@ cmd_push() {
     echo "dev-kit-host: new in $repository:"
     in_push "$push" "$SHOW_NEW" "${REMOTE_ARGS[@]}" -w /push/repo.git -- "$REMOTE_URL" \
         || fail "could not compare with $repository"
+    compare_copies "$push"
 
     if ! $yes; then
         local answer
-        read -r -p "Push this to $repository? [y/N] " answer < /dev/tty
+        read -r -p "Push this to $repository? [y/N] " answer < /dev/tty || :
         [[ $answer == [yYjJ] ]] || fail "not pushed"
     fi
     # shellcheck disable=SC2016 # runs in the container
     in_push "$push" 'timeout 600 git push --atomic "$1" $(sed "s|.*|&:&|" /push/refs)' \
         "${REMOTE_ARGS[@]}" -w /push/repo.git -- "$REMOTE_URL"
+
+    offer_copies "$name" "$yes"
 }
 
 case "${1:-}" in

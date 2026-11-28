@@ -167,6 +167,120 @@ check "push makes control characters on stderr visible" escapes_stderr
 in_volume 'git config --unset core.fsyncMethod'
 check "push leaves no volume behind after a refusal" test -z "$(push_volumes)"
 
+# A release tag: push shows how the copies here differ from the tag's files before it asks, and
+# after the push takes them over only when asked in a terminal, never with --yes, and never a file
+# that cannot be read plainly
+in_volume "git tag v9.9.11"
+release_matches() {
+    "$script" push --yes dev-kit-test main v9.9.11 > "$tmp/push.log" 2>&1 || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q 'devcontainer.json: the same as .devcontainer/devcontainer.json in v9.9.11' "$tmp/push.log" \
+        && grep -q 'nothing of v9.9.11 to take over' "$tmp/push.log"
+}
+check "push of a release whose files match the copies says so" release_matches
+cp .devcontainer/devcontainer.json "$tmp/host-before.json"
+in_volume "printf '{ \"name\": \"released\" }\n' > .devcontainer/devcontainer.json \
+    && git add .devcontainer/devcontainer.json && $commit -m 'change the devcontainer' && git tag v9.9.12"
+release_differs_yes() {
+    "$script" push --yes dev-kit-test main v9.9.12 > "$tmp/push.log" 2>&1 || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q '^+{ "name": "released" }$' "$tmp/push.log" && grep -q 'push --yes never takes them over' "$tmp/push.log" \
+        && grep -q 'devcontainer.json: 1 line(s) added, 1 removed' "$tmp/push.log" \
+        && [[ $(grep -n '^+{ "name": "released" }$' "$tmp/push.log" | cut -d: -f1) -lt $(grep -n 'never takes' "$tmp/push.log" | cut -d: -f1) ]] \
+        && cmp -s .devcontainer/devcontainer.json "$tmp/host-before.json"
+}
+check "push --yes of a release shows how the copies differ but keeps them" release_differs_yes
+# Runs push of main and $1 in a pseudo-terminal (script) and types $2 at once, then $3 when the
+# question about the copies appears, if it does (nothing: the end of the input)
+asked() {
+    local pid
+    rm -f "$tmp/in"
+    mkfifo "$tmp/in"
+    script -qec "\"$script\" push dev-kit-test main $1" /dev/null < "$tmp/in" > "$tmp/push.log" 2>&1 &
+    pid=$!
+    exec 3> "$tmp/in"
+    printf '%s' "$2" >&3
+    for _ in $(seq 240); do
+        grep -q 'Take them over' "$tmp/push.log" && break
+        kill -0 "$pid" 2> /dev/null || break
+        sleep 0.5
+    done
+    # push may have ended without the question
+    (
+        trap '' PIPE
+        printf '%s' "$3" >&3
+    ) 2> /dev/null || :
+    exec 3>&-
+    wait "$pid"
+}
+release_declined() {
+    asked v9.9.12 $'y\n' $'n\n' || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q 'the copies here stay as they are' "$tmp/push.log" && cmp -s .devcontainer/devcontainer.json "$tmp/host-before.json"
+}
+check "push of a release keeps the copies when you decline" release_declined
+release_typed_ahead() {
+    asked v9.9.12 $'y\ny\n' '' || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q 'the copies here stay as they are' "$tmp/push.log" && cmp -s .devcontainer/devcontainer.json "$tmp/host-before.json"
+}
+check "push of a release does not take an answer typed ahead" release_typed_ahead
+release_taken_over() {
+    asked v9.9.12 $'y\n' $'y\n' || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q 'took .devcontainer/devcontainer.json of v9.9.12 over' "$tmp/push.log" \
+        && [[ $(cat .devcontainer/devcontainer.json) == '{ "name": "released" }' ]] \
+        && cmp -s .devcontainer/Dockerfile "$src/Dockerfile"
+}
+check "push of a release takes the tag's files over when you agree" release_taken_over
+# Not offered: a link, a file with a NUL (diff would call it binary), a change too long to read
+refused_release() {
+    local tag=$1 setup=$2 message=$3
+    in_volume "$setup && git add Dockerfile && $commit -m '$tag' && git tag $tag"
+    asked "$tag" $'y\n' $'y\n' || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q "$message" "$tmp/push.log" && grep -q "nothing of $tag to take over" "$tmp/push.log" \
+        && cmp -s .devcontainer/Dockerfile "$src/Dockerfile"
+}
+check "push of a release takes over no symbolic link" \
+    refused_release v9.9.13 'ln -sf /etc/passwd Dockerfile' 'Dockerfile in v9.9.13 is no regular file'
+check "push of a release takes over no file with control characters" \
+    refused_release v9.9.14 'rm -f Dockerfile && printf "# \000\nFROM scratch AS dev\nLABEL hidden=1\n" > Dockerfile' 'holds control characters'
+check "push of a release takes over no change too long to read" \
+    refused_release v9.9.15 'echo "FROM scratch AS dev" > Dockerfile && i=0 && while [ $i -lt 300 ]; do echo "# $i"; i=$((i + 1)); done >> Dockerfile' 'more than can be read'
+in_volume "git checkout -q v9.9.12 -- Dockerfile && $commit -m 'back' && git tag v9.9.2 v9.9.11 && git branch v8.0.0"
+check "push compares the highest release tag" \
+    bash -c '"$1" push --yes dev-kit-test v9.9.15 v9.9.2 2>&1 | grep -q "devcontainer files of v9.9.15"' _ "$script"
+check "push compares no branch named like a release" \
+    bash -c 'out=$("$1" push --yes dev-kit-test v8.0.0 2>&1) && [[ $out != *"devcontainer files"* ]]' _ "$script"
+check "push leaves no volume behind after a release" test -z "$(push_volumes)"
+cp "$tmp/host-before.json" .devcontainer/devcontainer.json
+# Without a release tag, a push of main is compared too (a change to the devcontainer alone needs
+# no release); other branches are not
+main_compared() {
+    "$script" push --yes dev-kit-test main > "$tmp/push.log" 2>&1 || {
+        cat "$tmp/push.log"
+        return 1
+    }
+    grep -q 'the devcontainer files of main against the copies here' "$tmp/push.log" \
+        && grep -q '^+{ "name": "released" }$' "$tmp/push.log" && grep -q 'push --yes never takes them over' "$tmp/push.log"
+}
+check "push of main shows how the copies differ" main_compared
+check "push of another branch compares nothing" \
+    bash -c 'out=$("$1" push --yes dev-kit-test many 2>&1) && [[ $out != *"devcontainer files"* ]]' _ "$script"
+
 # The repository's files change: prepare warns, diff and show escape them
 in_volume 'printf "{ \"runArgs\": [\"--privileged\"] }\n" > .devcontainer/devcontainer.json && echo "LABEL x=y" >> Dockerfile'
 warns() {
